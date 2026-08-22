@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import ProgressBar from '../components/ProgressBar';
+import { LockIcon, AlertCircleIcon, RefreshIcon, ArrowRightIcon } from '../components/Icons';
 
 const OTP_LEN = 6;
 const DEMO_OTP = '123456';
@@ -23,14 +24,12 @@ export default function OtpScreen({ authData, onVerified }) {
   const [canResend, setCanResend] = useState(false);
   const inputRefs = useRef([]);
 
-  // Start countdown on mount
   useEffect(() => {
     if (countdown <= 0) { setCanResend(true); return; }
     const id = setTimeout(() => setCountdown(c => c - 1), 1000);
     return () => clearTimeout(id);
   }, [countdown]);
 
-  // Auto-focus first input
   useEffect(() => {
     inputRefs.current[0]?.focus();
   }, []);
@@ -94,13 +93,13 @@ export default function OtpScreen({ authData, onVerified }) {
       return;
     }
     setLoading(true);
-    await new Promise(r => setTimeout(r, 900)); // Simulated network delay
+    await new Promise(r => setTimeout(r, 800));
     setLoading(false);
 
     if (otp === DEMO_OTP) {
       onVerified();
     } else {
-      setError('Invalid or expired OTP. Try 123456 for demo.');
+      setError('Invalid code. Use 123456 for demo.');
       setDigits(Array(OTP_LEN).fill(''));
       inputRefs.current[0]?.focus();
     }
@@ -113,35 +112,35 @@ export default function OtpScreen({ authData, onVerified }) {
       <div className="card">
         <ProgressBar currentStep={2} />
 
-        {/* ── Logo strip ── */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 10,
-          justifyContent: 'center', marginBottom: 24,
-        }}>
-          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="" width={40} height={40}
-            style={{ borderRadius: 10, boxShadow: '0 2px 10px rgba(20,184,166,.2)' }} />
-          <span style={{ fontWeight: 700, fontSize: '.95rem', color: 'var(--text-primary)' }}>
-            Smart Medication Reminder
-          </span>
+        <div className="logo-strip">
+          <img
+            src={`${import.meta.env.BASE_URL}logo.png`}
+            alt=""
+            width={32}
+            height={32}
+          />
+          <span className="logo-strip__name">Smart Medication Reminder</span>
         </div>
 
-        <h1 className="card-title">Verify your identity</h1>
-        <p className="card-subtitle">
-          Enter the 6-digit code we just sent to:
+        <h1 className="screen-title">Verify your identity</h1>
+        <p className="screen-subtitle">
+          Enter the 6-digit verification code sent to your registered contact.
         </p>
 
-        <div className="masked-contact" aria-live="polite">
-          Code sent to <strong>{maskedContact}</strong>
+        <div className="masked-contact-box" aria-live="polite">
+          <span>Verification code sent to</span>
+          <strong>{maskedContact}</strong>
         </div>
 
         {hasError && (
           <div className="alert alert-error" role="alert">
-            ❌ {error}
+            <AlertCircleIcon size={16} />
+            <span>{error}</span>
           </div>
         )}
 
         <form onSubmit={handleVerify} noValidate aria-label="OTP verification form">
-          <div className="otp-wrap" role="group" aria-label="One-time password input">
+          <div className="otp-row" role="group" aria-label="One-time password input">
             {digits.map((d, idx) => (
               <input
                 key={idx}
@@ -150,7 +149,7 @@ export default function OtpScreen({ authData, onVerified }) {
                 type="text"
                 inputMode="numeric"
                 maxLength={1}
-                className={`otp-input${d ? ' filled' : ''}${hasError ? ' error' : ''}`}
+                className={`otp-cell${d ? ' filled' : ''}${hasError ? ' otp-error' : ''}`}
                 value={d}
                 onChange={e => handleChange(idx, e.target.value)}
                 onKeyDown={e => handleKeyDown(idx, e)}
@@ -163,19 +162,17 @@ export default function OtpScreen({ authData, onVerified }) {
 
           <div className="countdown-row" aria-live="polite">
             {canResend ? (
-              <>
-                Didn&apos;t get the code?{' '}
-                <button type="button" className="resend-btn" onClick={handleResend} id="resend-otp">
-                  Resend OTP
-                </button>
-              </>
+              <button type="button" className="resend-btn" onClick={handleResend} id="resend-otp">
+                <RefreshIcon size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />
+                Resend Code
+              </button>
             ) : (
-              <>
-                Resend OTP in{' '}
-                <strong style={{ color: 'var(--primary)' }}>
+              <span>
+                Resend code in{' '}
+                <strong className="countdown-timer">
                   0:{String(countdown).padStart(2, '0')}
                 </strong>
-              </>
+              </span>
             )}
           </div>
 
@@ -188,30 +185,23 @@ export default function OtpScreen({ authData, onVerified }) {
             >
               {loading ? (
                 <>
-                  <svg
-                    width="18" height="18" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
-                    style={{ animation: 'spin 0.8s linear infinite' }}
-                  >
-                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-                  </svg>
-                  Verifying…
+                  <span className="spinner" />
+                  <span>Verifying...</span>
                 </>
               ) : (
-                'Verify & Continue →'
+                <>
+                  <span>Verify &amp; Continue</span>
+                  <ArrowRightIcon size={16} />
+                </>
               )}
             </button>
           </div>
 
-          <p style={{ textAlign: 'center', marginTop: 14, fontSize: '.8rem', color: 'var(--text-muted)' }}>
-            💡 Demo hint: enter <strong>1 2 3 4 5 6</strong> to verify
+          <p style={{ textAlign: 'center', marginTop: 14, fontSize: '0.8125rem', color: 'var(--color-text-3)' }}>
+            Demo passcode: <strong>123456</strong>
           </p>
         </form>
       </div>
-
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
     </main>
   );
 }

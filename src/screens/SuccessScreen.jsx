@@ -3,9 +3,29 @@ import {
   CheckIcon, BellIcon, BarChart2Icon, UsersIcon, ArrowRightIcon, PillIcon
 } from '../components/Icons';
 
+function getDisplayName(authData) {
+  const data = authData?.data;
+  if (!data) return 'there';
+  if (data.fullName && data.fullName.trim()) {
+    const first = data.fullName.trim().split(' ')[0];
+    return first.charAt(0).toUpperCase() + first.slice(1);
+  }
+  if (data.identifier) {
+    const raw = data.identifier.trim();
+    if (raw.includes('@')) {
+      const username = raw.split('@')[0];
+      const cleanName = username.split(/[\._\-]/)[0].replace(/[^a-zA-Z]/g, '');
+      if (cleanName) {
+        return cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+      }
+      return username;
+    }
+  }
+  return 'there';
+}
+
 export default function SuccessScreen({ medicines, authData }) {
-  const name = authData?.data?.fullName || authData?.data?.identifier || 'there';
-  const firstName = name.split(' ')[0];
+  const firstName = getDisplayName(authData);
 
   return (
     <main className="page" id="success-screen">

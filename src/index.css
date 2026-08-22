@@ -476,6 +476,33 @@ select.form-input {
   background-position: right 12px center;
 }
 
+select.form-input:focus,
+.dosage-unit-select:focus {
+  background-color: var(--color-surface);
+}
+
+select option,
+select.form-input option,
+.dosage-unit-select option {
+  background-color: var(--color-surface);
+  color: var(--color-text-1);
+  padding: 8px 12px;
+}
+
+[data-theme="dark"] select option,
+[data-theme="dark"] select.form-input option,
+[data-theme="dark"] .dosage-unit-select option {
+  background-color: #111827;
+  color: #f1f5f9;
+}
+
+[data-theme="light"] select option,
+[data-theme="light"] select.form-input option,
+[data-theme="light"] .dosage-unit-select option {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
 /* Date input */
 input[type="date"].form-input {
   padding-right: var(--space-4);

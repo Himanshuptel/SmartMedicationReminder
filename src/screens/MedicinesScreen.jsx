@@ -323,7 +323,7 @@ export default function MedicinesScreen({ authData, onComplete }) {
           display: 'flex', alignItems: 'center', gap: 10,
           justifyContent: 'center', marginBottom: 24,
         }}>
-          <img src="/logo.png" alt="" width={40} height={40}
+          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="" width={40} height={40}
             style={{ borderRadius: 10, boxShadow: '0 2px 10px rgba(20,184,166,.2)' }} />
           <span style={{ fontWeight: 700, fontSize: '.95rem', color: 'var(--text-primary)' }}>
             Smart Medication Reminder

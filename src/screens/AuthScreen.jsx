@@ -228,13 +228,13 @@ export default function AuthScreen({ onComplete }) {
         {/* ── Left: Preview panel ── */}
         <div className="auth-split__preview" aria-hidden="true">
           <div className="auth-split__logo-hero">
-            <img src="/logo.png" alt="MedRemind" width={88} height={88} />
+            <img src={`${import.meta.env.BASE_URL}logo.png`} alt="MedRemind" width={88} height={88} />
             <h2>Smart Medication<br />Reminder</h2>
             <p>Never miss a dose. Stay healthy, stay on track.</p>
           </div>
 
           <div className="auth-split__mockup">
-            <img src="/mockup.png" alt="App screens preview" />
+            <img src={`${import.meta.env.BASE_URL}mockup.png`} alt="App screens preview" />
           </div>
 
           <div className="auth-split__features">
@@ -265,7 +265,7 @@ export default function AuthScreen({ onComplete }) {
               marginBottom: 24,
             }} className="auth-mobile-hero">
               <img
-                src="/logo.png"
+                src={`${import.meta.env.BASE_URL}logo.png`}
                 alt="MedRemind logo"
                 width={64}
                 height={64}

@@ -12,7 +12,7 @@ export default function SuccessScreen({ medicines, authData }) {
           {/* Logo + brand */}
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginBottom: 28 }}>
             <img
-              src="/logo.png"
+              src={`${import.meta.env.BASE_URL}logo.png`}
               alt="MedRemind logo"
               width={80}
               height={80}
@@ -54,7 +54,7 @@ export default function SuccessScreen({ medicines, authData }) {
             boxShadow: '0 8px 28px rgba(0,0,0,.1)',
           }}>
             <img
-              src="/mockup.png"
+              src={`${import.meta.env.BASE_URL}mockup.png`}
               alt="Smart Medication Reminder app screens preview"
               style={{ width: '100%', display: 'block' }}
             />

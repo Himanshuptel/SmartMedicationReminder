@@ -5,7 +5,7 @@ export default function TopBar({ darkMode, onToggleDark }) {
     <header className="top-bar" role="banner">
       <a href="#" className="top-bar__logo" aria-label="MedRemind Home">
         <img
-          src="/logo.png"
+          src={`${import.meta.env.BASE_URL}logo.png`}
           alt="MedRemind logo"
           width="36"
           height="36"

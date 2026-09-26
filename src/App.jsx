@@ -4,6 +4,11 @@ import AuthScreen from './screens/AuthScreen';
 import OtpScreen from './screens/OtpScreen';
 import MedicinesScreen from './screens/MedicinesScreen';
 import SuccessScreen from './screens/SuccessScreen';
+import DashboardScreen from './screens/DashboardScreen';
+import AlarmModal from './components/AlarmModal';
+import SosModal from './components/SosModal';
+import SystemDesignModal from './components/SystemDesignModal';
+import { api } from './services/api';
 import './index.css';
 
 const SCREENS = {
@@ -11,12 +16,51 @@ const SCREENS = {
   OTP: 'otp',
   MEDICINES: 'medicines',
   SUCCESS: 'success',
+  DASHBOARD: 'dashboard'
 };
 
 export default function App() {
-  const [screen, setScreen] = useState(SCREENS.AUTH);
-  const [authData, setAuthData] = useState(null);
+  const [screen, setScreen] = useState(SCREENS.DASHBOARD);
+  const [authData, setAuthData] = useState(() => {
+    try {
+      const stored = localStorage.getItem('medremind_auth');
+      return stored ? JSON.parse(stored) : { data: { fullName: 'Himanshu Patel', email: 'himanshu@paruluniversity.ac.in', role: 'patient' } };
+    } catch {
+      return { data: { fullName: 'Himanshu Patel', email: 'himanshu@paruluniversity.ac.in', role: 'patient' } };
+    }
+  });
   const [savedMedicines, setSavedMedicines] = useState([]);
+  const [currentRole, setCurrentRole] = useState('patient');
+
+  // Modals
+  const [activeAlarm, setActiveAlarm] = useState(null);
+  const [sosOpen, setSosOpen] = useState(false);
+  const [systemDesignOpen, setSystemDesignOpen] = useState(false);
+
+  // Notification Feed
+  const [notifications, setNotifications] = useState([
+    {
+      id: 1,
+      title: 'Low Stock Refill Warning',
+      message: 'Lisinopril 10mg has only 4 tablets remaining.',
+      time: '10m ago',
+      status: 'unread'
+    },
+    {
+      id: 2,
+      title: 'Morning Dose Confirmed',
+      message: 'Metformin 500mg logged as taken at 08:35 AM.',
+      time: '1h ago',
+      status: 'read'
+    },
+    {
+      id: 3,
+      title: 'Clinician Recommendation',
+      message: 'Dr. Sathwik Chebrolu: Blood pressure is stable. Continue current regimen.',
+      time: 'Yesterday',
+      status: 'read'
+    }
+  ]);
 
   // Dark mode — persisted in localStorage
   const [darkMode, setDarkMode] = useState(() => {
@@ -39,6 +83,7 @@ export default function App() {
 
   const handleAuthComplete = (payload) => {
     setAuthData(payload);
+    try { localStorage.setItem('medremind_auth', JSON.stringify(payload)); } catch {}
     setScreen(SCREENS.OTP);
   };
 
@@ -51,9 +96,90 @@ export default function App() {
     setScreen(SCREENS.SUCCESS);
   };
 
+  const handleGoToDashboard = () => {
+    setScreen(SCREENS.DASHBOARD);
+  };
+
+  // Alarm simulation trigger
+  const handleTriggerTestAlarm = (customPayload) => {
+    setActiveAlarm(customPayload || {
+      name: 'Metformin',
+      dosage: '500 mg',
+      instructions: 'Take with a glass of water after dinner.',
+      scheduledTime: 'Now'
+    });
+  };
+
+  const handleAlarmTake = async (alarm) => {
+    await api.recordAction({
+      medicineName: alarm.name || alarm.medicineName,
+      dosage: alarm.dosage,
+      status: 'taken',
+      notes: 'Confirmed via Alarm Alert'
+    });
+    setActiveAlarm(null);
+  };
+
+  const handleAlarmSnooze = async (alarm, minutes = 10) => {
+    await api.recordAction({
+      medicineName: alarm.name || alarm.medicineName,
+      dosage: alarm.dosage,
+      status: 'snoozed',
+      notes: `Snoozed for ${minutes} minutes`
+    });
+    setActiveAlarm(null);
+  };
+
+  const handleAlarmSkip = async (alarm) => {
+    await api.recordAction({
+      medicineName: alarm.name || alarm.medicineName,
+      dosage: alarm.dosage,
+      status: 'missed',
+      notes: 'Patient skipped dose during alarm'
+    });
+    setActiveAlarm(null);
+  };
+
+  const userName = authData?.data?.fullName || 'Himanshu Patel';
+
   return (
     <div className="app-shell">
-      <TopBar darkMode={darkMode} onToggleDark={() => setDarkMode(d => !d)} />
+      <TopBar
+        darkMode={darkMode}
+        onToggleDark={() => setDarkMode(d => !d)}
+        currentRole={currentRole}
+        onRoleChange={setCurrentRole}
+        onTriggerTestAlarm={() => handleTriggerTestAlarm()}
+        onOpenSos={() => setSosOpen(true)}
+        onOpenSystemDesign={() => setSystemDesignOpen(true)}
+        notifications={notifications}
+        userName={userName}
+      />
+
+      {/* Mode navigation bar if user wants to switch between Onboarding Flow and Dashboard */}
+      <div className="system-banner-strip">
+        <span className="banner-tag">PROJECT SYSTEM</span>
+        <span>Smart Medication Reminder • Parul University (Guide: Prof. Sathwik Chebrolu)</span>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 10 }}>
+          {screen === SCREENS.DASHBOARD ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs text-primary"
+              onClick={() => setScreen(SCREENS.AUTH)}
+            >
+              Restart Onboarding Flow
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs text-primary"
+              onClick={() => setScreen(SCREENS.DASHBOARD)}
+            >
+              Back to Main Dashboard
+            </button>
+          )}
+        </div>
+      </div>
 
       {screen === SCREENS.AUTH && (
         <AuthScreen onComplete={handleAuthComplete} />
@@ -68,7 +194,41 @@ export default function App() {
       )}
 
       {screen === SCREENS.SUCCESS && (
-        <SuccessScreen medicines={savedMedicines} authData={authData} />
+        <SuccessScreen
+          medicines={savedMedicines}
+          authData={authData}
+          onGoToDashboard={handleGoToDashboard}
+        />
+      )}
+
+      {screen === SCREENS.DASHBOARD && (
+        <DashboardScreen
+          authData={authData}
+          currentRole={currentRole}
+          onOpenSos={() => setSosOpen(true)}
+          onTriggerAlarm={handleTriggerTestAlarm}
+        />
+      )}
+
+      {/* Global Live Alarm Modal */}
+      {activeAlarm && (
+        <AlarmModal
+          alarm={activeAlarm}
+          onTake={handleAlarmTake}
+          onSnooze={handleAlarmSnooze}
+          onSkip={handleAlarmSkip}
+          onClose={() => setActiveAlarm(null)}
+        />
+      )}
+
+      {/* Global SOS Emergency Modal */}
+      {sosOpen && (
+        <SosModal onClose={() => setSosOpen(false)} />
+      )}
+
+      {/* Global System Design Architecture Viewer Modal */}
+      {systemDesignOpen && (
+        <SystemDesignModal onClose={() => setSystemDesignOpen(false)} />
       )}
     </div>
   );

@@ -24,7 +24,7 @@ function getDisplayName(authData) {
   return 'there';
 }
 
-export default function SuccessScreen({ medicines, authData }) {
+export default function SuccessScreen({ medicines, authData, onGoToDashboard }) {
   const firstName = getDisplayName(authData);
 
   return (
@@ -88,14 +88,14 @@ export default function SuccessScreen({ medicines, authData }) {
           <button
             id="go-to-dashboard"
             className="btn btn-primary"
-            onClick={() => alert('Dashboard module — Initial setup completed.')}
+            onClick={onGoToDashboard}
           >
             <span>Go to Dashboard</span>
             <ArrowRightIcon size={16} />
           </button>
 
           <p style={{ marginTop: 14, fontSize: '0.75rem', color: 'var(--color-text-3)' }}>
-            Collected data saved to client state.
+            Initial configuration saved successfully.
           </p>
         </div>
       </div>

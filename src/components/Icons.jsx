@@ -275,3 +275,113 @@ export const HomeIcon = (p) => (
     <polyline points="9 22 9 12 15 12 15 22" />
   </Icon>
 );
+
+export const ClockIcon = (p) => (
+  <Icon {...p}>
+    <circle cx="12" cy="12" r="10" />
+    <polyline points="12 6 12 12 16 14" />
+  </Icon>
+);
+
+export const HeartIcon = (p) => (
+  <Icon {...p}>
+    <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+  </Icon>
+);
+
+export const ActivityIcon = (p) => (
+  <Icon {...p}>
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+  </Icon>
+);
+
+export const FileTextIcon = (p) => (
+  <Icon {...p}>
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="16" y1="13" x2="8" y2="13" />
+    <line x1="16" y1="17" x2="8" y2="17" />
+    <polyline points="10 9 9 9 8 9" />
+  </Icon>
+);
+
+export const AlertTriangleIcon = (p) => (
+  <Icon {...p}>
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </Icon>
+);
+
+export const SendIcon = (p) => (
+  <Icon {...p}>
+    <line x1="22" y1="2" x2="11" y2="13" />
+    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+  </Icon>
+);
+
+export const BotIcon = (p) => (
+  <Icon {...p}>
+    <rect width="18" height="12" x="3" y="6" rx="2" />
+    <circle cx="9" cy="12" r="1" fill="currentColor" />
+    <circle cx="15" cy="12" r="1" fill="currentColor" />
+    <path d="M12 2v4" />
+    <path d="M2 12h1" />
+    <path d="M21 12h1" />
+  </Icon>
+);
+
+export const Volume2Icon = (p) => (
+  <Icon {...p}>
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+  </Icon>
+);
+
+export const VolumeXIcon = (p) => (
+  <Icon {...p}>
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+    <line x1="22" y1="9" x2="16" y2="15" />
+    <line x1="16" y1="9" x2="22" y2="15" />
+  </Icon>
+);
+
+export const Trash2Icon = (p) => (
+  <Icon {...p}>
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+    <line x1="10" y1="11" x2="10" y2="17" />
+    <line x1="14" y1="11" x2="14" y2="17" />
+  </Icon>
+);
+
+export const Edit2Icon = (p) => (
+  <Icon {...p}>
+    <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+  </Icon>
+);
+
+export const SearchIcon = (p) => (
+  <Icon {...p}>
+    <circle cx="11" cy="11" r="8" />
+    <line x1="21" y1="21" x2="16.65" y2="16.65" />
+  </Icon>
+);
+
+export const SparklesIcon = (p) => (
+  <Icon {...p}>
+    <path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3L12 3z" />
+  </Icon>
+);
+
+export const DiagramIcon = (p) => (
+  <Icon {...p}>
+    <rect width="6" height="6" x="3" y="3" rx="1" />
+    <rect width="6" height="6" x="15" y="3" rx="1" />
+    <rect width="6" height="6" x="9" y="15" rx="1" />
+    <path d="M6 9v3a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9" />
+    <path d="M12 13v2" />
+  </Icon>
+);
+

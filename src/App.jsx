@@ -154,6 +154,8 @@ export default function App() {
         onOpenSystemDesign={() => setSystemDesignOpen(true)}
         notifications={notifications}
         userName={userName}
+        currentScreen={screen}
+        onOpenAuth={() => setScreen(s => s === SCREENS.AUTH ? SCREENS.DASHBOARD : SCREENS.AUTH)}
       />
 
       {/* Mode navigation bar if user wants to switch between Onboarding Flow and Dashboard */}

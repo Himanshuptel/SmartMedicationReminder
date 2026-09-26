@@ -13,7 +13,9 @@ export default function TopBar({
   onOpenSos,
   onOpenSystemDesign,
   notifications = [],
-  userName = 'Himanshu Patel'
+  userName = 'Himanshu Patel',
+  currentScreen,
+  onOpenAuth
 }) {
   const [showNotifs, setShowNotifs] = useState(false);
 
@@ -148,11 +150,20 @@ export default function TopBar({
           {darkMode ? <SunIcon size={18} /> : <MoonIcon size={18} />}
         </button>
 
-        {/* Active User Pill */}
-        <div className="user-profile-badge">
+        {/* Active User Pill & Login/Sign-out Button */}
+        <button
+          type="button"
+          className="user-profile-badge"
+          onClick={onOpenAuth}
+          title="Click to Switch Account or View Login / Sign Up"
+          style={{ cursor: 'pointer', border: 'none', background: 'var(--color-surface-2)' }}
+        >
           <div className="user-avatar">{userName.charAt(0)}</div>
           <span className="user-name">{userName}</span>
-        </div>
+          <span style={{ fontSize: '0.7rem', color: 'var(--color-primary)', fontWeight: 600 }}>
+            {currentScreen === 'auth' ? '• In Login' : '• Login/Logout'}
+          </span>
+        </button>
       </div>
     </header>
   );

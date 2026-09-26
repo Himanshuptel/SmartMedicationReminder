@@ -1803,6 +1803,13 @@ input[type="date"].form-input {
   font-size: 0.88rem;
   color: var(--color-text-2);
 }
+.next-dose-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  flex-shrink: 0;
+}
 .badge-pulse {
   background: var(--color-primary);
   color: #fff;

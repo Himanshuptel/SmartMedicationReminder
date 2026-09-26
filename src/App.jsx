@@ -8,7 +8,7 @@ import DashboardScreen from './screens/DashboardScreen';
 import AlarmModal from './components/AlarmModal';
 import SosModal from './components/SosModal';
 import SystemDesignModal from './components/SystemDesignModal';
-import { api } from './services/api';
+import { api, getUserDisplayName, isDemoUser } from './services/api';
 import './index.css';
 
 const SCREENS = {
@@ -144,7 +144,29 @@ export default function App() {
     setActiveAlarm(null);
   };
 
-  const userName = authData?.data?.fullName || 'Himanshu Patel';
+  const userName = getUserDisplayName(authData);
+  const isDemo = isDemoUser(authData);
+
+  const handleSwitchToDemo = () => {
+    const demoAuth = {
+      type: 'login',
+      data: {
+        fullName: 'Himanshu Patel',
+        email: 'himanshu@paruluniversity.ac.in',
+        identifier: 'himanshu@paruluniversity.ac.in',
+        role: 'patient'
+      }
+    };
+    setAuthData(demoAuth);
+    try { localStorage.setItem('medremind_auth', JSON.stringify(demoAuth)); } catch {}
+    setScreen(SCREENS.DASHBOARD);
+  };
+
+  const handleLogout = () => {
+    setAuthData(null);
+    try { localStorage.removeItem('medremind_auth'); } catch {}
+    setScreen(SCREENS.AUTH);
+  };
 
   return (
     <div className="app-shell">
@@ -158,8 +180,11 @@ export default function App() {
         onOpenSystemDesign={() => setSystemDesignOpen(true)}
         notifications={notifications}
         userName={userName}
+        isDemo={isDemo}
         currentScreen={screen}
         onOpenAuth={() => setScreen(s => s === SCREENS.AUTH ? SCREENS.DASHBOARD : SCREENS.AUTH)}
+        onSwitchToDemo={handleSwitchToDemo}
+        onLogout={handleLogout}
       />
 
       {/* Mode navigation bar if user wants to switch between Onboarding Flow and Dashboard */}

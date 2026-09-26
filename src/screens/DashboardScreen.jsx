@@ -408,7 +408,7 @@ export default function DashboardScreen({
                 <h3>Welcome, {userName}!</h3>
                 <p>Add your first medication to activate your automated reminder schedule.</p>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div className="next-dose-actions">
                 <button
                   type="button"
                   className="btn btn-primary"

@@ -15,7 +15,10 @@ export default function TopBar({
   notifications = [],
   userName = 'Himanshu Patel',
   currentScreen,
-  onOpenAuth
+  onOpenAuth,
+  onSwitchToDemo,
+  onLogout,
+  isDemo
 }) {
   const [showNotifs, setShowNotifs] = useState(false);
 
@@ -150,19 +153,37 @@ export default function TopBar({
           {darkMode ? <SunIcon size={18} /> : <MoonIcon size={18} />}
         </button>
 
-        {/* Active User Pill & Login/Sign-out Button */}
+        {/* Demo Account Switcher Button */}
+        {!isDemo ? (
+          <button
+            type="button"
+            className="btn btn-outline-primary btn-xs"
+            onClick={onSwitchToDemo}
+            title="Switch to Demo Account with full pre-loaded medications"
+          >
+            <span>Switch to Demo (Himanshu)</span>
+          </button>
+        ) : (
+          <span className="badge" style={{ background: 'var(--color-primary-soft)', color: 'var(--color-primary)', fontSize: '0.7rem', padding: '3px 8px' }}>
+            Demo Account
+          </span>
+        )}
+
+        {/* Active User Pill */}
+        <div className="user-profile-badge">
+          <div className="user-avatar">{userName.charAt(0).toUpperCase()}</div>
+          <span className="user-name">{userName}</span>
+        </div>
+
+        {/* Explicit Logout Button */}
         <button
           type="button"
-          className="user-profile-badge"
-          onClick={onOpenAuth}
-          title="Click to Switch Account or View Login / Sign Up"
-          style={{ cursor: 'pointer', border: 'none', background: 'var(--color-surface-2)' }}
+          className="btn btn-ghost btn-xs text-danger"
+          onClick={onLogout}
+          title="Log out and return to Login screen"
+          style={{ fontWeight: 600 }}
         >
-          <div className="user-avatar">{userName.charAt(0)}</div>
-          <span className="user-name">{userName}</span>
-          <span style={{ fontSize: '0.7rem', color: 'var(--color-primary)', fontWeight: 600 }}>
-            {currentScreen === 'auth' ? '• In Login' : '• Login/Logout'}
-          </span>
+          <span>Log out</span>
         </button>
       </div>
     </header>

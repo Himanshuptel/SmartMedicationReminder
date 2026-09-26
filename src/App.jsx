@@ -20,7 +20,7 @@ const SCREENS = {
 };
 
 export default function App() {
-  const [screen, setScreen] = useState(SCREENS.DASHBOARD);
+  const [screen, setScreen] = useState(SCREENS.AUTH);
   const [authData, setAuthData] = useState(() => {
     try {
       const stored = localStorage.getItem('medremind_auth');
@@ -84,7 +84,11 @@ export default function App() {
   const handleAuthComplete = (payload) => {
     setAuthData(payload);
     try { localStorage.setItem('medremind_auth', JSON.stringify(payload)); } catch {}
-    setScreen(SCREENS.OTP);
+    if (payload?.type === 'login') {
+      setScreen(SCREENS.DASHBOARD);
+    } else {
+      setScreen(SCREENS.OTP);
+    }
   };
 
   const handleOtpVerified = () => {
@@ -184,7 +188,10 @@ export default function App() {
       </div>
 
       {screen === SCREENS.AUTH && (
-        <AuthScreen onComplete={handleAuthComplete} />
+        <AuthScreen
+          onComplete={handleAuthComplete}
+          onSkipToDashboard={() => setScreen(SCREENS.DASHBOARD)}
+        />
       )}
 
       {screen === SCREENS.OTP && (

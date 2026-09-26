@@ -307,7 +307,7 @@ function LoginForm({ onSubmit }) {
 }
 
 /* ── Auth Screen ──────────────────────────────────── */
-export default function AuthScreen({ onComplete }) {
+export default function AuthScreen({ onComplete, onSkipToDashboard }) {
   const [mode, setMode] = useState('login');
 
   const handleSubmit = (payload) => {
@@ -392,6 +392,19 @@ export default function AuthScreen({ onComplete }) {
               <LoginForm onSubmit={handleSubmit} />
             ) : (
               <SignUpForm onSubmit={handleSubmit} />
+            )}
+
+            {onSkipToDashboard && (
+              <div style={{ marginTop: 16, textAlign: 'center', borderTop: '1px solid var(--color-border)', paddingTop: 12 }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm text-primary"
+                  onClick={onSkipToDashboard}
+                  style={{ fontWeight: 600 }}
+                >
+                  <span>Skip to Full Dashboard (Demo Mode) →</span>
+                </button>
+              </div>
             )}
           </div>
         </div>

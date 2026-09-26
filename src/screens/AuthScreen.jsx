@@ -298,10 +298,31 @@ function LoginForm({ onSubmit }) {
         </a>
       </div>
 
-      <button id="login-submit" type="submit" className="btn btn-primary">
-        <span>Continue</span>
-        <ArrowRightIcon size={16} />
-      </button>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+        <button id="login-submit" type="submit" className="btn btn-primary" style={{ width: '100%' }}>
+          <span>Log In</span>
+          <ArrowRightIcon size={16} />
+        </button>
+
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          style={{ width: '100%' }}
+          onClick={() => {
+            onSubmit({
+              type: 'login',
+              data: {
+                fullName: 'Himanshu Patel',
+                email: 'himanshu@paruluniversity.ac.in',
+                identifier: 'himanshu@paruluniversity.ac.in',
+                role: 'patient'
+              }
+            });
+          }}
+        >
+          <span>Use Demo Account (Himanshu Patel)</span>
+        </button>
+      </div>
     </form>
   );
 }

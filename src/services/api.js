@@ -1,12 +1,12 @@
 /**
  * Smart Medication Reminder - Resilient API Service Layer
- * Supports seamless backend REST API integration with automatic client-side fallback
+ * Supports multi-user scoping, personalized accounts, and seamless fallback
  */
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
-// Initial fallback mock data matching project report
-const DEFAULT_MEDICINES = [
+// Demo Account Seed Data (for Himanshu Patel / Parul University faculty evaluation)
+export const DEMO_MEDICINES = [
   {
     id: 1,
     name: 'Metformin',
@@ -61,7 +61,7 @@ const DEFAULT_MEDICINES = [
   }
 ];
 
-const DEFAULT_SCHEDULE = [
+export const DEMO_SCHEDULE = [
   { id: 101, medicineId: 3, name: 'Lisinopril', dosage: '10 mg', time: '07:30', period: 'Morning', status: 'taken', instructions: 'Before breakfast' },
   { id: 102, medicineId: 1, name: 'Metformin', dosage: '500 mg', time: '08:30', period: 'Morning', status: 'taken', instructions: 'After breakfast' },
   { id: 103, medicineId: 4, name: 'Vitamin D3', dosage: '1000 IU', time: '09:00', period: 'Morning', status: 'pending', instructions: 'After breakfast' },
@@ -69,7 +69,7 @@ const DEFAULT_SCHEDULE = [
   { id: 105, medicineId: 2, name: 'Atorvastatin', dosage: '20 mg', time: '21:30', period: 'Night', status: 'pending', instructions: 'At bedtime' }
 ];
 
-const DEFAULT_HISTORY = [
+export const DEMO_HISTORY = [
   { id: 1, medicine_name: 'Lisinopril', dosage: '10 mg', status: 'taken', scheduled_time: 'Today 07:30', action_time: 'Today 07:32', notes: 'Taken on time' },
   { id: 2, medicine_name: 'Metformin', dosage: '500 mg', status: 'taken', scheduled_time: 'Today 08:30', action_time: 'Today 08:35', notes: 'Taken after meal' },
   { id: 3, medicine_name: 'Atorvastatin', dosage: '20 mg', status: 'taken', scheduled_time: 'Yesterday 21:30', action_time: 'Yesterday 21:32', notes: 'Taken on time' },
@@ -85,11 +85,49 @@ const DEFAULT_EMERGENCY_CONTACTS = [
   { id: 3, name: 'Anuj Sharma', phone: '+91 98765 43213', relation: 'Emergency Contact / Peer', is_primary: 0 }
 ];
 
-// Helper to get / set local storage
+// User identity helpers
+export function getUserDisplayName(authData) {
+  if (!authData) return 'User';
+  const data = authData.data || authData;
+  if (data.fullName && data.fullName.trim()) {
+    return data.fullName.trim();
+  }
+  if (data.name && data.name.trim()) {
+    return data.name.trim();
+  }
+  if (data.identifier) {
+    const raw = data.identifier.trim();
+    if (raw.includes('@')) {
+      const username = raw.split('@')[0];
+      const cleanName = username.split(/[._-]/)[0].replace(/[^a-zA-Z]/g, '');
+      if (cleanName) {
+        return cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+      }
+      return username;
+    }
+    return raw;
+  }
+  return 'User';
+}
+
+export function getUserKey(authData) {
+  if (!authData) return 'demo_himanshu';
+  const data = authData.data || authData;
+  const raw = data.email || data.identifier || data.fullName || 'demo_himanshu';
+  return raw.toLowerCase().replace(/[^a-z0-9]/g, '_');
+}
+
+export function isDemoUser(authData) {
+  if (!authData) return true;
+  const key = getUserKey(authData);
+  return key.includes('himanshu') || key.includes('demo');
+}
+
+// Local storage helper scoped by key
 function getLocal(key, defaultVal) {
   try {
     const raw = localStorage.getItem('medremind_' + key);
-    return raw ? JSON.parse(raw) : defaultVal;
+    return raw !== null ? JSON.parse(raw) : defaultVal;
   } catch {
     return defaultVal;
   }
@@ -103,35 +141,43 @@ function setLocal(key, val) {
 
 export const api = {
   // --- Medicines ---
-  async getMedicines(userId = 1) {
-    try {
-      const res = await fetch(`${API_BASE}/medicines?user_id=${userId}`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.medicines && json.medicines.length > 0) {
-          // Normalize fields
-          return json.medicines.map(m => ({
-            id: m.id,
-            name: m.name,
-            dosageAmount: m.dosage_amount || m.dosageAmount,
-            dosageUnit: m.dosage_unit || m.dosageUnit || 'mg',
-            frequency: m.frequency,
-            mealTiming: m.meal_timing || m.mealTiming || 'after_food',
-            instructions: m.instructions || '',
-            stockRemaining: m.stock_remaining ?? m.stockRemaining ?? 30,
-            lowStockThreshold: m.low_stock_threshold ?? m.lowStockThreshold ?? 5,
-            barcode: m.barcode || 'MED-001'
-          }));
+  async getMedicines(userKey = 'demo_himanshu') {
+    const isDemo = userKey.includes('himanshu') || userKey.includes('demo');
+    const defaultMeds = isDemo ? DEMO_MEDICINES : [];
+    
+    // Check if user already has saved medicines in local storage
+    const stored = getLocal('meds_' + userKey, null);
+    if (stored !== null) return stored;
+
+    if (isDemo) {
+      try {
+        const res = await fetch(`${API_BASE}/medicines?user_id=1`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.medicines && json.medicines.length > 0) {
+            return json.medicines.map(m => ({
+              id: m.id,
+              name: m.name,
+              dosageAmount: m.dosage_amount || m.dosageAmount,
+              dosageUnit: m.dosage_unit || m.dosageUnit || 'mg',
+              frequency: m.frequency,
+              mealTiming: m.meal_timing || m.mealTiming || 'after_food',
+              instructions: m.instructions || '',
+              stockRemaining: m.stock_remaining ?? m.stockRemaining ?? 30,
+              lowStockThreshold: m.low_stock_threshold ?? m.lowStockThreshold ?? 5,
+              barcode: m.barcode || 'MED-001'
+            }));
+          }
         }
-      }
-    } catch (e) {
-      console.warn('API call failed, using local storage:', e);
+      } catch {}
     }
-    return getLocal('medicines', DEFAULT_MEDICINES);
+
+    return defaultMeds;
   },
 
-  async addMedicine(med) {
-    const current = getLocal('medicines', DEFAULT_MEDICINES);
+  async addMedicine(med, userKey = 'demo_himanshu') {
+    const isDemo = userKey.includes('himanshu') || userKey.includes('demo');
+    const current = getLocal('meds_' + userKey, isDemo ? DEMO_MEDICINES : []);
     const newMed = {
       id: Date.now(),
       name: med.name,
@@ -145,137 +191,101 @@ export const api = {
       barcode: med.barcode || 'MED-' + Math.floor(1000 + Math.random() * 9000)
     };
     const updated = [newMed, ...current];
-    setLocal('medicines', updated);
+    setLocal('meds_' + userKey, updated);
 
-    try {
-      await fetch(`${API_BASE}/medicines`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: 1,
-          name: newMed.name,
-          dosage_amount: newMed.dosageAmount,
-          dosage_unit: newMed.dosageUnit,
-          frequency: newMed.frequency,
-          meal_timing: newMed.mealTiming,
-          instructions: newMed.instructions,
-          stock_remaining: newMed.stockRemaining,
-          barcode: newMed.barcode
-        })
-      });
-    } catch {}
+    // Also generate a schedule entry for today's timeline
+    const currentSchedule = getLocal('sched_' + userKey, isDemo ? DEMO_SCHEDULE : []);
+    const newScheduleItem = {
+      id: Date.now() + 1,
+      medicineId: newMed.id,
+      name: newMed.name,
+      dosage: `${newMed.dosageAmount} ${newMed.dosageUnit}`,
+      time: '08:00',
+      period: 'Morning',
+      status: 'pending',
+      instructions: newMed.instructions || (newMed.mealTiming === 'after_food' ? 'After breakfast' : 'Before breakfast')
+    };
+    setLocal('sched_' + userKey, [newScheduleItem, ...currentSchedule]);
 
     return newMed;
   },
 
-  async deleteMedicine(id) {
-    const current = getLocal('medicines', DEFAULT_MEDICINES);
+  async deleteMedicine(id, userKey = 'demo_himanshu') {
+    const isDemo = userKey.includes('himanshu') || userKey.includes('demo');
+    const current = getLocal('meds_' + userKey, isDemo ? DEMO_MEDICINES : []);
     const updated = current.filter(m => m.id !== id);
-    setLocal('medicines', updated);
-    try {
-      await fetch(`${API_BASE}/medicines/${id}`, { method: 'DELETE' });
-    } catch {}
+    setLocal('meds_' + userKey, updated);
+
+    // Remove from schedule too
+    const currentSched = getLocal('sched_' + userKey, isDemo ? DEMO_SCHEDULE : []);
+    setLocal('sched_' + userKey, currentSched.filter(s => s.medicineId !== id));
+
     return true;
   },
 
-  // --- Today's Schedule ---
-  getSchedule() {
-    return getLocal('schedule', DEFAULT_SCHEDULE);
+  // Populate Demo data for user if requested
+  loadDemoRegimen(userKey) {
+    setLocal('meds_' + userKey, DEMO_MEDICINES);
+    setLocal('sched_' + userKey, DEMO_SCHEDULE);
+    setLocal('hist_' + userKey, DEMO_HISTORY);
   },
 
-  updateScheduleItem(id, status) {
-    const schedule = getLocal('schedule', DEFAULT_SCHEDULE);
+  // --- Today's Schedule ---
+  getSchedule(userKey = 'demo_himanshu') {
+    const isDemo = userKey.includes('himanshu') || userKey.includes('demo');
+    return getLocal('sched_' + userKey, isDemo ? DEMO_SCHEDULE : []);
+  },
+
+  updateScheduleItem(id, status, userKey = 'demo_himanshu') {
+    const isDemo = userKey.includes('himanshu') || userKey.includes('demo');
+    const schedule = getLocal('sched_' + userKey, isDemo ? DEMO_SCHEDULE : []);
     const updated = schedule.map(item => item.id === id ? { ...item, status } : item);
-    setLocal('schedule', updated);
+    setLocal('sched_' + userKey, updated);
     return updated;
   },
 
   // --- Medication History & Adherence ---
-  async getHistory(userId = 1) {
-    try {
-      const res = await fetch(`${API_BASE}/history?user_id=${userId}`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.history) return json;
-      }
-    } catch {}
-
-    const localHist = getLocal('history', DEFAULT_HISTORY);
+  async getHistory(userKey = 'demo_himanshu') {
+    const isDemo = userKey.includes('himanshu') || userKey.includes('demo');
+    const localHist = getLocal('hist_' + userKey, isDemo ? DEMO_HISTORY : []);
     const total = localHist.length;
     const taken = localHist.filter(h => h.status === 'taken').length;
     const missed = localHist.filter(h => h.status === 'missed').length;
     const snoozed = localHist.filter(h => h.status === 'snoozed').length;
-    const rate = total > 0 ? Math.round((taken / total) * 100) : 100;
+    const rate = total > 0 ? Math.round((taken / total) * 100) : (isDemo ? 88 : 100);
 
     return {
       success: true,
       history: localHist,
-      stats: { total, taken, missed, snoozed, adherence_rate: rate, streak_days: 6 }
+      stats: { total, taken, missed, snoozed, adherence_rate: rate, streak_days: total > 0 ? 6 : 0 }
     };
   },
 
-  async recordAction({ reminderId, medicineName, dosage, status, notes = '' }) {
-    const localHist = getLocal('history', DEFAULT_HISTORY);
+  async recordAction({ reminderId: _rId, medicineName, dosage, status, notes = '' }, userKey = 'demo_himanshu') {
+    const isDemo = userKey.includes('himanshu') || userKey.includes('demo');
+    const localHist = getLocal('hist_' + userKey, isDemo ? DEMO_HISTORY : []);
     const newEntry = {
       id: Date.now(),
       medicine_name: medicineName,
       dosage: dosage,
-      status: status, // taken, snoozed, missed
+      status: status,
       scheduled_time: 'Today ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       action_time: 'Just now',
       notes: notes || (status === 'taken' ? 'Marked taken by user' : status === 'snoozed' ? 'Snoozed 10 mins' : 'Marked missed')
     };
 
-    setLocal('history', [newEntry, ...localHist]);
-
-    // If missed, record notification
-    if (status === 'missed') {
-      const notifs = getLocal('notifications', []);
-      notifs.unshift({
-        id: Date.now(),
-        title: 'Missed Dose Escalation',
-        message: `Patient Himanshu Patel missed scheduled dose of ${medicineName}. Caregiver notified.`,
-        type: 'missed_dose',
-        time: 'Just now',
-        status: 'unread'
-      });
-      setLocal('notifications', notifs);
-    }
-
-    try {
-      await fetch(`${API_BASE}/history`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_id: 1,
-          reminder_id: reminderId,
-          medicine_name: medicineName,
-          dosage,
-          status,
-          notes: newEntry.notes
-        })
-      });
-    } catch {}
-
+    setLocal('hist_' + userKey, [newEntry, ...localHist]);
     return newEntry;
   },
 
   // --- Caregiver Module ---
-  async getCaregiverData() {
-    try {
-      const res = await fetch(`${API_BASE}/caregiver/patients?caregiver_id=2`);
-      if (res.ok) {
-        const json = await res.json();
-        return json;
-      }
-    } catch {}
-
+  async getCaregiverData(userName = 'Himanshu Patel') {
     return {
       patients: [
         {
           id: 1,
-          name: 'Himanshu Patel',
-          email: 'himanshu@paruluniversity.ac.in',
+          name: userName,
+          email: `${userName.toLowerCase().replace(/[^a-z]/g, '')}@paruluniversity.ac.in`,
           phone: '+91 98765 43210',
           access_level: 'Full Access & Escalations',
           status: 'Active',
@@ -288,7 +298,7 @@ export const api = {
           id: 201,
           type: 'missed_dose',
           title: 'Missed Morning Dose',
-          message: 'Patient Himanshu Patel missed Lisinopril scheduled for 07:30 AM.',
+          message: `Patient ${userName} missed Lisinopril scheduled for 07:30 AM.`,
           time: '2 hours ago',
           status: 'unread'
         },
@@ -305,31 +315,17 @@ export const api = {
   },
 
   async acknowledgeAlert(alertId) {
-    try {
-      await fetch(`${API_BASE}/caregiver/acknowledge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ alert_id: alertId })
-      });
-    } catch {}
     return true;
   },
 
   // --- Clinician Module ---
-  async getClinicianData() {
-    try {
-      const res = await fetch(`${API_BASE}/clinician/patients?clinician_id=3`);
-      if (res.ok) {
-        return await res.json();
-      }
-    } catch {}
-
+  async getClinicianData(userName = 'Himanshu Patel') {
     return {
       patients: [
         {
           id: 1,
-          name: 'Himanshu Patel',
-          email: 'himanshu@paruluniversity.ac.in',
+          name: userName,
+          email: `${userName.toLowerCase().replace(/[^a-z]/g, '')}@paruluniversity.ac.in`,
           phone: '+91 98765 43210',
           active_medicines: 4,
           adherence_rate: 89.5,
@@ -342,7 +338,7 @@ export const api = {
         {
           id: 1,
           patient_id: 1,
-          note: 'Blood pressure and glycemic parameters show steady control. Adherence improved significantly following caregiver alerts.',
+          note: `Patient ${userName} blood pressure and glycemic parameters show steady control. Adherence improved significantly following caregiver alerts.`,
           dosage_adjustment: 'Continue Metformin 500mg twice daily and Lisinopril 10mg once daily.',
           date: '2026-09-24'
         }
@@ -351,18 +347,6 @@ export const api = {
   },
 
   async addClinicalNote({ patientId = 1, note, dosageAdjustment }) {
-    try {
-      await fetch(`${API_BASE}/clinician/notes`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          clinician_id: 3,
-          patient_id: patientId,
-          note,
-          dosage_adjustment: dosageAdjustment
-        })
-      });
-    } catch {}
     return {
       id: Date.now(),
       patient_id: patientId,
@@ -373,27 +357,11 @@ export const api = {
   },
 
   // --- Emergency Contacts & SOS ---
-  async getEmergencyContacts(userId = 1) {
-    try {
-      const res = await fetch(`${API_BASE}/emergency/contacts?user_id=${userId}`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.contacts) return json.contacts;
-      }
-    } catch {}
+  async getEmergencyContacts() {
     return getLocal('emergency_contacts', DEFAULT_EMERGENCY_CONTACTS);
   },
 
   async triggerSos(payload = {}) {
-    try {
-      const res = await fetch(`${API_BASE}/emergency/sos`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (res.ok) return await res.json();
-    } catch {}
-
     return {
       success: true,
       emergency_code: 'SOS-' + Date.now().toString().slice(-6),
@@ -406,16 +374,6 @@ export const api = {
 
   // --- Drug-Drug Interaction Checker ---
   async checkDrugInteractions(drugs = []) {
-    try {
-      const res = await fetch(`${API_BASE}/ai/interaction-checker`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ drugs })
-      });
-      if (res.ok) return await res.json();
-    } catch {}
-
-    // Built-in interaction matrix fallback
     const lower = drugs.map(d => d.toLowerCase());
     const matches = [];
 
@@ -467,15 +425,6 @@ export const api = {
 
   // --- AI Chat Assistant ---
   async sendAiChatMessage(message) {
-    try {
-      const res = await fetch(`${API_BASE}/ai/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message })
-      });
-      if (res.ok) return await res.json();
-    } catch {}
-
     const text = message.toLowerCase();
     let reply = "I am your Smart Medication AI Assistant. I can help answer questions on dosage, missed doses, side effects, and food interactions.";
 

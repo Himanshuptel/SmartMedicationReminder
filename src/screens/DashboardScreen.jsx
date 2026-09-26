@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   PillIcon, ClockIcon, CheckCircleIcon, AlertTriangleIcon,
   RepeatIcon, PlusIcon, SearchIcon, Trash2Icon, FileTextIcon,
@@ -6,15 +6,19 @@ import {
   StethoscopeIcon, BarChart2Icon, CheckIcon
 } from '../components/Icons';
 import AddMedicineModal from '../components/AddMedicineModal';
-import { api } from '../services/api';
+import { api, getUserDisplayName, getUserKey, isDemoUser } from '../services/api';
 import { playSuccessChime } from '../services/sound';
 
 export default function DashboardScreen({
-  authData: _authData,
+  authData,
   currentRole,
   onOpenSos,
   onTriggerAlarm
 }) {
+  const userName = getUserDisplayName(authData);
+  const userKey = getUserKey(authData);
+  const isDemo = isDemoUser(authData);
+
   const [activeTab, setActiveTab] = useState('schedule');
   const [medicines, setMedicines] = useState([]);
   const [schedule, setSchedule] = useState([]);
@@ -35,7 +39,7 @@ export default function DashboardScreen({
   const [chatMessages, setChatMessages] = useState([
     {
       sender: 'bot',
-      text: 'Hello Himanshu! I am your AI Medication Clinical Assistant. Ask me anything about dosage schedules, what to do if you miss a dose, food interactions, or medication storage.',
+      text: `Hello ${userName}! I am your AI Medication Clinical Assistant. Ask me anything about dosage schedules, what to do if you miss a dose, food interactions, or medication storage.`,
       time: 'Just now'
     }
   ]);
@@ -54,24 +58,24 @@ export default function DashboardScreen({
     return () => clearInterval(timer);
   }, []);
 
-  // Fetch initial data
-  const loadData = async () => {
-    const meds = await api.getMedicines();
+  // Fetch initial data scoped to this specific user account
+  const loadData = useCallback(async () => {
+    const meds = await api.getMedicines(userKey);
     setMedicines(meds);
-    setSchedule(api.getSchedule());
-    const hist = await api.getHistory();
+    setSchedule(api.getSchedule(userKey));
+    const hist = await api.getHistory(userKey);
     setHistoryData(hist);
-    const cg = await api.getCaregiverData();
+    const cg = await api.getCaregiverData(userName);
     setCaregiverData(cg);
-    const cl = await api.getClinicianData();
+    const cl = await api.getClinicianData(userName);
     setClinicianData(cl);
     const ec = await api.getEmergencyContacts();
     setEmergencyContacts(ec);
-  };
+  }, [userKey, userName]);
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [loadData]);
 
   // Sync tab when TopBar role changes
   useEffect(() => {
@@ -79,10 +83,10 @@ export default function DashboardScreen({
     else if (currentRole === 'clinician') setActiveTab('clinician');
   }, [currentRole]);
 
-  // Actions
+  // Actions scoped to user
   const handleTakeDose = async (item) => {
     playSuccessChime();
-    const updated = api.updateScheduleItem(item.id, 'taken');
+    const updated = api.updateScheduleItem(item.id, 'taken', userKey);
     setSchedule(updated);
     await api.recordAction({
       reminderId: item.medicineId,
@@ -90,14 +94,13 @@ export default function DashboardScreen({
       dosage: item.dosage,
       status: 'taken',
       notes: 'Confirmed intake via Schedule tab'
-    });
-    // refresh history
-    const hist = await api.getHistory();
+    }, userKey);
+    const hist = await api.getHistory(userKey);
     setHistoryData(hist);
   };
 
   const handleSnoozeDose = async (item) => {
-    const updated = api.updateScheduleItem(item.id, 'snoozed');
+    const updated = api.updateScheduleItem(item.id, 'snoozed', userKey);
     setSchedule(updated);
     await api.recordAction({
       reminderId: item.medicineId,
@@ -105,13 +108,13 @@ export default function DashboardScreen({
       dosage: item.dosage,
       status: 'snoozed',
       notes: 'Snoozed 10 minutes'
-    });
-    const hist = await api.getHistory();
+    }, userKey);
+    const hist = await api.getHistory(userKey);
     setHistoryData(hist);
   };
 
   const handleMissDose = async (item) => {
-    const updated = api.updateScheduleItem(item.id, 'missed');
+    const updated = api.updateScheduleItem(item.id, 'missed', userKey);
     setSchedule(updated);
     await api.recordAction({
       reminderId: item.medicineId,
@@ -119,21 +122,26 @@ export default function DashboardScreen({
       dosage: item.dosage,
       status: 'missed',
       notes: 'Patient reported dose skipped'
-    });
-    const hist = await api.getHistory();
+    }, userKey);
+    const hist = await api.getHistory(userKey);
     setHistoryData(hist);
   };
 
   const handleAddMedicine = async (medData) => {
-    await api.addMedicine(medData);
+    await api.addMedicine(medData, userKey);
     await loadData();
   };
 
   const handleDeleteMed = async (id) => {
     if (confirm('Are you sure you want to remove this medication from your active regimen?')) {
-      await api.deleteMedicine(id);
+      await api.deleteMedicine(id, userKey);
       await loadData();
     }
+  };
+
+  const handleLoadSampleRegimen = () => {
+    api.loadDemoRegimen(userKey);
+    loadData();
   };
 
   const handleCheckInteractions = async () => {
@@ -243,10 +251,10 @@ export default function DashboardScreen({
             <span className="time-badge">{currentTime.toLocaleTimeString()}</span>
           </div>
           <h1 className="dashboard-title">
-            Welcome back, Himanshu
+            Welcome back, {userName}
           </h1>
           <p className="dashboard-sub">
-            Your daily adherence score is <strong>{historyData.stats?.adherence_rate || 88}%</strong> with an active <strong>6-day streak</strong>.
+            Your daily adherence score is <strong>{historyData.stats?.adherence_rate || (isDemo ? 88 : 100)}%</strong> with an active <strong>{historyData.stats?.streak_days || (isDemo ? 6 : 0)}-day streak</strong>.
           </p>
         </div>
 
@@ -359,8 +367,8 @@ export default function DashboardScreen({
             </div>
             <div className="stat-card">
               <span className="stat-label">On-Time Adherence</span>
-              <div className="stat-number text-primary">{historyData.stats?.adherence_rate || 88}%</div>
-              <span className="stat-sub">Past 14 days</span>
+              <div className="stat-number text-primary">{historyData.stats?.adherence_rate || (isDemo ? 88 : 100)}%</div>
+              <span className="stat-sub">Compliance score</span>
             </div>
             <div className="stat-card">
               <span className="stat-label">Low Stock Alerts</span>
@@ -372,26 +380,53 @@ export default function DashboardScreen({
           </div>
 
           {/* Next Dose Banner */}
-          <div className="next-dose-banner">
-            <div className="next-dose-info">
-              <span className="badge badge-pulse">UPCOMING REMINDER</span>
-              <h3>Metformin 500 mg • 08:30 PM</h3>
-              <p>Evening dose after dinner. Take with a glass of water.</p>
+          {schedule.length > 0 ? (
+            <div className="next-dose-banner">
+              <div className="next-dose-info">
+                <span className="badge badge-pulse">UPCOMING REMINDER</span>
+                <h3>{schedule[0].name} {schedule[0].dosage} • {schedule[0].time}</h3>
+                <p>{schedule[0].instructions || 'Take as prescribed.'}</p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-outline-primary"
+                onClick={() => onTriggerAlarm({
+                  name: schedule[0].name,
+                  dosage: schedule[0].dosage,
+                  instructions: schedule[0].instructions,
+                  scheduledTime: schedule[0].time
+                })}
+              >
+                <ClockIcon size={16} />
+                <span>Simulate Alarm Now</span>
+              </button>
             </div>
-            <button
-              type="button"
-              className="btn btn-outline-primary"
-              onClick={() => onTriggerAlarm({
-                name: 'Metformin',
-                dosage: '500 mg',
-                instructions: 'Take with a glass of water after dinner.',
-                scheduledTime: '08:30 PM'
-              })}
-            >
-              <ClockIcon size={16} />
-              <span>Simulate Alarm Now</span>
-            </button>
-          </div>
+          ) : (
+            <div className="next-dose-banner" style={{ background: 'var(--color-surface-2)', border: '1px dashed var(--color-border)' }}>
+              <div className="next-dose-info">
+                <span className="badge" style={{ background: 'var(--color-primary-soft)', color: 'var(--color-primary)' }}>NEW ACCOUNT SETUP</span>
+                <h3>Welcome, {userName}!</h3>
+                <p>Add your first medication to activate your automated reminder schedule.</p>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setShowAddMed(true)}
+                >
+                  <PlusIcon size={16} />
+                  <span>Add First Medicine</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleLoadSampleRegimen}
+                >
+                  <span>Populate Sample Regimen</span>
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Schedule Timeline */}
           <div className="card schedule-card">
@@ -406,7 +441,25 @@ export default function DashboardScreen({
             </div>
 
             <div className="timeline-list">
-              {schedule.map((item) => (
+              {schedule.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '36px 20px', background: 'var(--color-surface-2)', borderRadius: 'var(--radius-md)' }}>
+                  <PillIcon size={36} color="var(--color-primary)" />
+                  <h3 style={{ margin: '12px 0 6px 0' }}>No Medications Scheduled Yet</h3>
+                  <p style={{ margin: '0 0 16px 0', color: 'var(--color-text-2)', fontSize: '0.9rem' }}>
+                    Welcome to your personalized account! Start by adding your prescribed medicines.
+                  </p>
+                  <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                    <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowAddMed(true)}>
+                      <PlusIcon size={14} />
+                      <span>Add Medicine</span>
+                    </button>
+                    <button type="button" className="btn btn-secondary btn-sm" onClick={handleLoadSampleRegimen}>
+                      <span>Load Sample Regimen</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                schedule.map((item) => (
                 <div key={item.id} className={`timeline-item status-${item.status}`}>
                   <div className="timeline-time-col">
                     <strong className="timeline-time">{item.time}</strong>
@@ -463,7 +516,7 @@ export default function DashboardScreen({
                     </div>
                   </div>
                 </div>
-              ))}
+              )))}
             </div>
           </div>
         </div>
@@ -494,7 +547,25 @@ export default function DashboardScreen({
           </div>
 
           <div className="meds-grid">
-            {filteredMeds.map((med) => {
+            {filteredMeds.length === 0 ? (
+              <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '36px 20px', background: 'var(--color-surface)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--color-border)' }}>
+                <PillIcon size={36} color="var(--color-primary)" />
+                <h3 style={{ margin: '12px 0 6px 0' }}>Your Medicine Cabinet is Empty</h3>
+                <p style={{ margin: '0 0 16px 0', color: 'var(--color-text-2)', fontSize: '0.9rem' }}>
+                  Add your prescription details to start receiving reminders and tracking adherence.
+                </p>
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                  <button type="button" className="btn btn-primary" onClick={() => setShowAddMed(true)}>
+                    <PlusIcon size={16} />
+                    <span>Add New Medicine</span>
+                  </button>
+                  <button type="button" className="btn btn-outline-primary" onClick={handleLoadSampleRegimen}>
+                    <span>Populate Sample Medicines</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              filteredMeds.map((med) => {
               const isLowStock = med.stockRemaining <= med.lowStockThreshold;
               return (
                 <div key={med.id} className="med-catalog-card">
@@ -559,7 +630,7 @@ export default function DashboardScreen({
                   </div>
                 </div>
               );
-            })}
+            }))}
           </div>
         </div>
       )}

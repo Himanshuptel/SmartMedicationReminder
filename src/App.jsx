@@ -38,29 +38,24 @@ export default function App() {
   const [systemDesignOpen, setSystemDesignOpen] = useState(false);
 
   // Notification Feed
-  const [notifications, setNotifications] = useState([
-    {
-      id: 1,
-      title: 'Low Stock Refill Warning',
-      message: 'Lisinopril 10mg has only 4 tablets remaining.',
-      time: '10m ago',
-      status: 'unread'
-    },
-    {
-      id: 2,
-      title: 'Morning Dose Confirmed',
-      message: 'Metformin 500mg logged as taken at 08:35 AM.',
-      time: '1h ago',
-      status: 'read'
-    },
-    {
-      id: 3,
-      title: 'Clinician Recommendation',
-      message: 'Dr. Sathwik Chebrolu: Blood pressure is stable. Continue current regimen.',
-      time: 'Yesterday',
-      status: 'read'
-    }
-  ]);
+  const [notifications, setNotifications] = useState([]);
+
+  useEffect(() => {
+    let mounted = true;
+    const fetchNotifs = async () => {
+      try {
+        const res = await api.getNotifications(authData);
+        if (mounted && res?.notifications) {
+          setNotifications(res.notifications);
+        }
+      } catch (err) {
+        console.error('Error fetching notifications:', err);
+      }
+    };
+    fetchNotifs();
+    const interval = setInterval(fetchNotifs, 15000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, [authData]);
 
   // Dark mode — persisted in localStorage
   const [darkMode, setDarkMode] = useState(() => {

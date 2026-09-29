@@ -60,17 +60,24 @@ export default function DashboardScreen({
 
   // Fetch initial data scoped to this specific user account
   const loadData = useCallback(async () => {
-    const meds = await api.getMedicines(userKey);
-    setMedicines(meds);
-    setSchedule(api.getSchedule(userKey));
-    const hist = await api.getHistory(userKey);
-    setHistoryData(hist);
-    const cg = await api.getCaregiverData(userName);
-    setCaregiverData(cg);
-    const cl = await api.getClinicianData(userName);
-    setClinicianData(cl);
-    const ec = await api.getEmergencyContacts();
-    setEmergencyContacts(ec);
+    try {
+      const [meds, sched, hist, cg, cl, ec] = await Promise.all([
+        api.getMedicines(userKey),
+        api.getSchedule(userKey),
+        api.getHistory(userKey),
+        api.getCaregiverData(userName),
+        api.getClinicianData(userName),
+        api.getEmergencyContacts(userKey)
+      ]);
+      setMedicines(meds);
+      setSchedule(sched);
+      setHistoryData(hist);
+      setCaregiverData(cg);
+      setClinicianData(cl);
+      setEmergencyContacts(ec);
+    } catch (err) {
+      console.error('Error loading dashboard data:', err);
+    }
   }, [userKey, userName]);
 
   useEffect(() => {
@@ -86,45 +93,51 @@ export default function DashboardScreen({
   // Actions scoped to user
   const handleTakeDose = async (item) => {
     playSuccessChime();
-    const updated = api.updateScheduleItem(item.id, 'taken', userKey);
-    setSchedule(updated);
-    await api.recordAction({
-      reminderId: item.medicineId,
-      medicineName: item.name,
-      dosage: item.dosage,
-      status: 'taken',
-      notes: 'Confirmed intake via Schedule tab'
-    }, userKey);
-    const hist = await api.getHistory(userKey);
-    setHistoryData(hist);
+    setSchedule(prev => prev.map(s => s.id === item.id ? { ...s, status: 'taken' } : s));
+    try {
+      await api.recordAction({
+        reminderId: item.medicineId || item.id,
+        medicineName: item.name,
+        dosage: item.dosage,
+        status: 'taken',
+        notes: 'Confirmed intake via Schedule tab'
+      }, userKey);
+      await loadData();
+    } catch (err) {
+      console.error('Failed to record dose intake:', err);
+    }
   };
 
   const handleSnoozeDose = async (item) => {
-    const updated = api.updateScheduleItem(item.id, 'snoozed', userKey);
-    setSchedule(updated);
-    await api.recordAction({
-      reminderId: item.medicineId,
-      medicineName: item.name,
-      dosage: item.dosage,
-      status: 'snoozed',
-      notes: 'Snoozed 10 minutes'
-    }, userKey);
-    const hist = await api.getHistory(userKey);
-    setHistoryData(hist);
+    setSchedule(prev => prev.map(s => s.id === item.id ? { ...s, status: 'snoozed' } : s));
+    try {
+      await api.recordAction({
+        reminderId: item.medicineId || item.id,
+        medicineName: item.name,
+        dosage: item.dosage,
+        status: 'snoozed',
+        notes: 'Snoozed 10 minutes'
+      }, userKey);
+      await loadData();
+    } catch (err) {
+      console.error('Failed to record dose snooze:', err);
+    }
   };
 
   const handleMissDose = async (item) => {
-    const updated = api.updateScheduleItem(item.id, 'missed', userKey);
-    setSchedule(updated);
-    await api.recordAction({
-      reminderId: item.medicineId,
-      medicineName: item.name,
-      dosage: item.dosage,
-      status: 'missed',
-      notes: 'Patient reported dose skipped'
-    }, userKey);
-    const hist = await api.getHistory(userKey);
-    setHistoryData(hist);
+    setSchedule(prev => prev.map(s => s.id === item.id ? { ...s, status: 'missed' } : s));
+    try {
+      await api.recordAction({
+        reminderId: item.medicineId || item.id,
+        medicineName: item.name,
+        dosage: item.dosage,
+        status: 'missed',
+        notes: 'Patient reported dose skipped'
+      }, userKey);
+      await loadData();
+    } catch (err) {
+      console.error('Failed to record missed dose:', err);
+    }
   };
 
   const handleAddMedicine = async (medData) => {

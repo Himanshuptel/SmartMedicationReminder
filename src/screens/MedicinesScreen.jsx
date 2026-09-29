@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback } from 'react';
 import ProgressBar from '../components/ProgressBar';
 import Toast from '../components/Toast';
+import { api, getUserKey } from '../services/api';
 import {
   PillIcon, ScaleIcon, RepeatIcon, CalendarIcon, UploadIcon,
   ScanIcon, PlusIcon, XIcon, CheckCircleIcon, ArrowRightIcon,
@@ -311,22 +312,37 @@ export default function MedicinesScreen({ authData, onComplete }) {
     }
 
     setSubmitting(true);
-    await new Promise(r => setTimeout(r, 900));
-    setSubmitting(false);
+    try {
+      const payload = [];
+      for (const m of medicines) {
+        await api.addMedicine({
+          name: m.name,
+          dosageAmount: m.dosageAmount,
+          dosageUnit: m.dosageUnit,
+          frequency: m.frequency,
+          mealTiming: 'after_food',
+          startDate: m.startDate,
+          instructions: '',
+          barcode: m.scannedCode || undefined
+        }, getUserKey(authData), authData);
 
-    const payload = medicines.map(m => ({
-      name: m.name,
-      dosage: `${m.dosageAmount} ${m.dosageUnit}`,
-      frequency: FREQUENCIES.find(f => f.value === m.frequency)?.label,
-      startDate: m.startDate,
-      hasImage: !!m.imagePreview,
-      scannedCode: m.scannedCode || null,
-    }));
+        payload.push({
+          name: m.name,
+          dosage: `${m.dosageAmount} ${m.dosageUnit}`,
+          frequency: FREQUENCIES.find(f => f.value === m.frequency)?.label,
+          startDate: m.startDate,
+          hasImage: !!m.imagePreview,
+          scannedCode: m.scannedCode || null,
+        });
+      }
 
-    console.log('Medicines data collected:', JSON.stringify(payload, null, 2));
-
-    showToast(`${payload.length} medicine${payload.length > 1 ? 's' : ''} saved successfully.`, 'success');
-    setTimeout(() => onComplete(payload), 1000);
+      setSubmitting(false);
+      showToast(`${payload.length} medicine${payload.length > 1 ? 's' : ''} saved successfully to database.`, 'success');
+      setTimeout(() => onComplete(payload), 800);
+    } catch (err) {
+      setSubmitting(false);
+      showToast(err.message || 'Failed to save medicines to backend database.', 'error');
+    }
   };
 
   const handleScanCapture = (code) => {

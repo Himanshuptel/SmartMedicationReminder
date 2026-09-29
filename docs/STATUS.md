@@ -32,17 +32,18 @@ This audit assesses the state of the Smart Medication Reminder repository agains
 | **Phase 0** | Audit frontend `localStorage` / mock usage | **AUDITED** | 16 discrete functions in `api.js` use mock data or `localStorage` | Documented in Section 3 of this status report |
 | **Phase 0** | Audit uncalled backend endpoints | **AUDITED** | 18 of 19 endpoints on `server.py` never invoked by frontend | Documented in Section 4 of this status report |
 | **Phase 0** | Audit database table usage | **AUDITED** | 8 tables exist; 2 missing (`otp_codes`, `sessions`); 2 tables never mutated | Documented in Section 5 of this status report |
-| **Phase 1** | Schema covers all 10 tables | **UNMET** | `otp_codes` and `sessions` missing from `database.py` | Add `otp_codes` and `sessions` DDL in Phase 1 |
-| **Phase 1** | Foreign key enforcement (`PRAGMA foreign_keys=ON`) | **UNMET** | Neither `database.py` nor `server.py` issues `PRAGMA foreign_keys=ON` | Add pragma execution to database connection helpers |
-| **Phase 1** | Database indexes on foreign keys & lookup columns | **UNMET** | Zero indexes defined in `database.py` beyond PRIMARY KEYs | Add indexes on `user_id`, `medicine_id`, `scheduled_time`, `session_token` |
-| **Phase 1** | Versioned migration / init script | **UNMET** | Only bare `init_db()` in `database.py` without schema versioning | Implement migration runner with schema version tracking |
-| **Phase 1** | Parameterized SQL queries everywhere | **PARTIAL** | Most queries use `?`, but wildcard strings are concatenated | Audit and strictly parameterize 100% of queries |
-| **Phase 1** | Secure password hashing (PBKDF2/bcrypt; never return hashes) | **UNMET** | Uses `"sha256_mock_hash"` and `"hashed_" + password` | Implement PBKDF2-HMAC-SHA256 with per-user salt in `hashlib` |
-| **Phase 1** | Database as single source of truth (remove silent fallbacks) | **UNMET** | `api.js` catches all fetch errors and silently falls back to local mocks | Remove silent mock fallbacks; display clear API errors |
-| **Phase 1** | Consistent JSON error schema and HTTP status codes | **UNMET** | Inconsistent structures (`{"error": ...}` vs `{"success": false, "error": ...}`) | Standardize response wrapper across all endpoints |
-| **Phase 1** | Input validation on every endpoint | **UNMET** | Endpoints accept raw unvalidated bodies without type/length/boundary checks | Implement request validation helper for payloads and query params |
-| **Phase 1** | Automated test suite (pytest / unittest) | **UNMET** | Zero test files exist in the repository | Create `tests/test_api.py` covering success and failure cases |
-| **Phase 1** | Script registering user, adding medicine, verifying DB | **UNMET** | No direct verification script exists | Build `scripts/verify_db_e2e.py` |
+| **Phase 1** | Schema covers all 10 tables (`users`, `medicines`, `reminders`, `medication_history`, `caregiver_patient`, `emergency_contacts`, `notifications`, `clinical_notes`, `otp_codes`, `sessions`) | **COMPLIANT** | Defined in `backend/database.py` schema V1; verified via sqlite3 table inspection | Completed in Phase 1 |
+| **Phase 1** | Foreign key enforcement (`PRAGMA foreign_keys=ON`) | **COMPLIANT** | `get_connection()` executes `PRAGMA foreign_keys = ON;` on every connection | Completed in Phase 1 |
+| **Phase 1** | Database indexes on foreign keys & lookup columns | **COMPLIANT** | 8 indexes created covering users, medicines, reminders, history, notifications, OTP, and sessions | Completed in Phase 1 |
+| **Phase 1** | Versioned migration / init script (works on fresh clone) | **COMPLIANT** | `backend/database.py` includes migration runner and seed CLI flags (`--init`, `--seed`) | Completed in Phase 1 |
+| **Phase 1** | Parameterized SQL queries everywhere | **COMPLIANT** | 100% of SQL queries in `app.py` use parameterized `?` bindings | Completed in Phase 1 |
+| **Phase 1** | Secure password hashing (PBKDF2; never return hashes) | **COMPLIANT** | Implemented PBKDF2-HMAC-SHA256 (100k iter, random salt); hashes excluded from all API responses | Completed in Phase 1 |
+| **Phase 1** | Consolidate on ONE backend: Flask + SQLite (remove duplicate `server.py`) | **COMPLIANT** | Consolidated logic in `backend/app.py`; `server.py` deleted; all routes preserved | Completed in Phase 1 |
+| **Phase 1** | Database as single source of truth & rewire `api.js` (no silent mock fallback) | **COMPLIANT** | `api.js` rewritten to fetch live endpoints; errors propagated; medicines, schedule, history, and notifs connected | Completed in Phase 1 |
+| **Phase 1** | Consistent JSON error schema and HTTP status codes | **COMPLIANT** | `api_success` and `api_error` helpers return standard error code, message, and HTTP status codes | Completed in Phase 1 |
+| **Phase 1** | Input validation on every endpoint | **COMPLIANT** | Request bodies validated for required fields, roles, types, and lengths | Completed in Phase 1 |
+| **Phase 1** | Automated test suite (pytest / unittest) | **COMPLIANT** | `tests/test_api.py` contains 17 automated tests for success and failure cases; 100% pass | Completed in Phase 1 |
+| **Phase 1** | Script registering user, adding medicine, verifying DB directly | **COMPLIANT** | `scripts/verify_db_e2e.py` executed; verified user, medicine, and reminders directly in SQLite | Completed in Phase 1 |
 | **Phase 2** | Server-side 6-digit random OTP via `secrets` module | **UNMET** | Frontend hardcodes `'123456'`; backend has no OTP generation | Implement `secrets.choice` generator in backend |
 | **Phase 2** | Store only hashed OTP in database | **UNMET** | No OTP storage exists | Hash OTP with PBKDF2 before persisting to `otp_codes` |
 | **Phase 2** | OTP 5-minute expiry, max 5 attempts, 30s resend cooldown, single use | **UNMET** | No backend OTP rate limiting or expiry tracking | Enforce constraints via `expires_at`, `attempts`, and cooldown checks |

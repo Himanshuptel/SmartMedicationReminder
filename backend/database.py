@@ -1,171 +1,257 @@
 """
-Smart Medication Reminder - Database Initializer and Models (SQLite)
+Smart Medication Reminder - Database Initializer, Schema Migrations & Models (SQLite)
 Parul University - Semester IV IMCA / BCA Project
 Guide: Prof. Sathwik Chebrolu
 """
 import sqlite3
 import os
-from datetime import datetime, timedelta
+import hashlib
+import hmac
+import secrets
+import argparse
+from datetime import datetime, timedelta, timezone
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "medremind.db")
+DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "medremind.db")
 
-def get_connection():
-    conn = sqlite3.connect(DB_PATH)
+def get_connection(db_path=None):
+    """
+    Establish SQLite connection with foreign key enforcement and row factory.
+    """
+    path = db_path or os.environ.get("DB_PATH", DEFAULT_DB_PATH)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
-def init_db():
-    conn = get_connection()
+# ── Password Security (PBKDF2-HMAC-SHA256) ─────────────────────────
+
+def hash_password(password: str) -> str:
+    """
+    Hash a plaintext password using PBKDF2-HMAC-SHA256 with a unique random salt.
+    Format: salt_hex$hash_hex
+    """
+    if not password:
+        raise ValueError("Password cannot be empty")
+    salt = secrets.token_bytes(16)
+    key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
+    return f"{salt.hex()}${key.hex()}"
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """
+    Verify a plaintext password against a stored PBKDF2 hash using constant-time comparison.
+    Supports legacy mock hashes for graceful migration.
+    """
+    if not password or not stored_hash:
+        return False
+
+    # Check for legacy mock hash compatibility
+    if stored_hash.startswith("hashed_"):
+        return hmac.compare_digest(stored_hash, "hashed_" + password)
+    if stored_hash == "sha256_mock_hash":
+        return True
+
+    if "$" not in stored_hash:
+        return False
+
+    try:
+        salt_hex, key_hex = stored_hash.split("$", 1)
+        salt = bytes.fromhex(salt_hex)
+        expected_key = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
+        return hmac.compare_digest(expected_key.hex(), key_hex)
+    except Exception:
+        return False
+
+# ── Schema Definition & Migrations ─────────────────────────────────
+
+SCHEMA_V1 = """
+-- 1. Schema Migrations Table
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 2. Users Table
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT UNIQUE NOT NULL,
+    phone TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('patient', 'caregiver', 'clinician')),
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 3. Medicines Table
+CREATE TABLE IF NOT EXISTS medicines (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    dosage_amount TEXT NOT NULL,
+    dosage_unit TEXT NOT NULL DEFAULT 'mg',
+    frequency TEXT NOT NULL,
+    meal_timing TEXT DEFAULT 'after_food',
+    start_date TEXT NOT NULL,
+    end_date TEXT,
+    instructions TEXT,
+    stock_remaining INTEGER DEFAULT 30,
+    low_stock_threshold INTEGER DEFAULT 5,
+    image_url TEXT,
+    barcode TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 4. Reminders Table
+CREATE TABLE IF NOT EXISTS reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    medicine_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    scheduled_time TEXT NOT NULL,
+    label TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'completed')),
+    sound_enabled INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 5. Medication History Table
+CREATE TABLE IF NOT EXISTS medication_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    reminder_id INTEGER,
+    user_id INTEGER NOT NULL,
+    medicine_name TEXT NOT NULL,
+    dosage TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('taken', 'missed', 'snoozed')),
+    scheduled_time TEXT NOT NULL,
+    action_time TEXT NOT NULL,
+    notes TEXT,
+    FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE SET NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 6. Caregiver-Patient Mapping
+CREATE TABLE IF NOT EXISTS caregiver_patient (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    caregiver_id INTEGER NOT NULL,
+    patient_id INTEGER NOT NULL,
+    access_level TEXT DEFAULT 'Full',
+    status TEXT DEFAULT 'Active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (caregiver_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 7. Emergency Contacts Table
+CREATE TABLE IF NOT EXISTS emergency_contacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    relation TEXT NOT NULL,
+    is_primary INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 8. Notifications Log Table
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    type TEXT NOT NULL CHECK(type IN ('reminder', 'missed_dose', 'emergency', 'refill', 'clinical')),
+    channel TEXT NOT NULL DEFAULT 'push',
+    status TEXT NOT NULL DEFAULT 'unread' CHECK(status IN ('unread', 'read', 'acknowledged')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 9. Clinical Notes Table
+CREATE TABLE IF NOT EXISTS clinical_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clinician_id INTEGER NOT NULL,
+    patient_id INTEGER NOT NULL,
+    note TEXT NOT NULL,
+    dosage_adjustment TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (clinician_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 10. OTP Verification Codes Table (Phase 1/2)
+CREATE TABLE IF NOT EXISTS otp_codes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    email TEXT NOT NULL,
+    phone TEXT,
+    otp_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    attempts INTEGER DEFAULT 0,
+    max_attempts INTEGER DEFAULT 5,
+    used INTEGER DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 11. Sessions Table (Phase 1/2)
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token_hash TEXT UNIQUE NOT NULL,
+    role TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ── Indexes ────────────────────────────────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+CREATE INDEX IF NOT EXISTS idx_medicines_user ON medicines(user_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_user ON reminders(user_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_med ON reminders(medicine_id);
+CREATE INDEX IF NOT EXISTS idx_history_user ON medication_history(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email);
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
+"""
+
+def apply_migrations(conn):
+    """
+    Apply database schema migrations.
+    """
     cursor = conn.cursor()
-
-    # 1. Users Table
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        phone TEXT NOT NULL,
-        role TEXT NOT NULL CHECK(role IN ('patient', 'caregiver', 'clinician')),
-        password_hash TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
 
-    # 2. Medicines Table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS medicines (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        dosage_amount TEXT NOT NULL,
-        dosage_unit TEXT NOT NULL DEFAULT 'mg',
-        frequency TEXT NOT NULL,
-        meal_timing TEXT DEFAULT 'after_food',
-        start_date TEXT NOT NULL,
-        end_date TEXT,
-        instructions TEXT,
-        stock_remaining INTEGER DEFAULT 30,
-        low_stock_threshold INTEGER DEFAULT 5,
-        image_url TEXT,
-        barcode TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    """)
-
-    # 3. Reminders Table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS reminders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        medicine_id INTEGER NOT NULL,
-        user_id INTEGER NOT NULL,
-        scheduled_time TEXT NOT NULL,
-        label TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'completed')),
-        sound_enabled INTEGER DEFAULT 1,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    """)
-
-    # 4. Medication History Table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS medication_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        reminder_id INTEGER,
-        user_id INTEGER NOT NULL,
-        medicine_name TEXT NOT NULL,
-        dosage TEXT NOT NULL,
-        status TEXT NOT NULL CHECK(status IN ('taken', 'missed', 'snoozed')),
-        scheduled_time TEXT NOT NULL,
-        action_time TEXT NOT NULL,
-        notes TEXT,
-        FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE SET NULL,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    """)
-
-    # 5. Caregiver-Patient Mapping
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS caregiver_patient (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        caregiver_id INTEGER NOT NULL,
-        patient_id INTEGER NOT NULL,
-        access_level TEXT DEFAULT 'Full',
-        status TEXT DEFAULT 'Active',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (caregiver_id) REFERENCES users(id) ON DELETE CASCADE,
-        FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    """)
-
-    # 6. Emergency Contacts Table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS emergency_contacts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        relation TEXT NOT NULL,
-        is_primary INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    """)
-
-    # 7. Notifications Log Table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS notifications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        title TEXT NOT NULL,
-        message TEXT NOT NULL,
-        type TEXT NOT NULL CHECK(type IN ('reminder', 'missed_dose', 'emergency', 'refill', 'clinical')),
-        channel TEXT NOT NULL DEFAULT 'push',
-        status TEXT NOT NULL DEFAULT 'unread',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    """)
-
-    # 8. Clinical Notes Table
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS clinical_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        clinician_id INTEGER NOT NULL,
-        patient_id INTEGER NOT NULL,
-        note TEXT NOT NULL,
-        dosage_adjustment TEXT,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (clinician_id) REFERENCES users(id) ON DELETE CASCADE,
-        FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    """)
-
-    conn.commit()
-
-    # Seed data if users table is empty
-    cursor.execute("SELECT COUNT(*) FROM users")
-    if cursor.fetchone()[0] == 0:
-        seed_data(cursor)
+    cursor.execute("SELECT version FROM schema_migrations WHERE version = 1")
+    if not cursor.fetchone():
+        cursor.executescript(SCHEMA_V1)
+        cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'initial_production_schema');")
         conn.commit()
 
-    conn.close()
-    print("Database initialized successfully at:", DB_PATH)
-
 def seed_data(cursor):
-    # Seed 3 core role users matching project report
+    """
+    Seed initial baseline dataset for Parul University faculty demonstration.
+    Uses PBKDF2 password hashes.
+    """
+    demo_password_hash = hash_password("DemoPassword123!")
+
     cursor.execute("""
         INSERT INTO users (id, name, email, phone, role, password_hash) VALUES
-        (1, 'Himanshu Patel', 'himanshu@paruluniversity.ac.in', '+91 98765 43210', 'patient', 'sha256_mock_hash'),
-        (2, 'Divyadarshan Chauhan', 'divyadarshan@paruluniversity.ac.in', '+91 98765 43211', 'caregiver', 'sha256_mock_hash'),
-        (3, 'Prof. Sathwik Chebrolu', 'sathwik.chebrolu@paruluniversity.ac.in', '+91 98765 43212', 'clinician', 'sha256_mock_hash')
-    """)
+        (1, 'Himanshu Patel', 'himanshu@paruluniversity.ac.in', '+91 98765 43210', 'patient', ?),
+        (2, 'Divyadarshan Chauhan', 'divyadarshan@paruluniversity.ac.in', '+91 98765 43211', 'caregiver', ?),
+        (3, 'Prof. Sathwik Chebrolu', 'sathwik.chebrolu@paruluniversity.ac.in', '+91 98765 43212', 'clinician', ?)
+    """, (demo_password_hash, demo_password_hash, demo_password_hash))
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    # Seed medicines for patient
     cursor.execute("""
         INSERT INTO medicines (id, user_id, name, dosage_amount, dosage_unit, frequency, meal_timing, start_date, instructions, stock_remaining, low_stock_threshold, barcode) VALUES
         (1, 1, 'Metformin', '500', 'mg', 'twice', 'after_food', ?, 'Take with a glass of water after meals to minimize stomach upset.', 24, 6, 'MED-MET-500'),
@@ -174,7 +260,6 @@ def seed_data(cursor):
         (4, 1, 'Vitamin D3 & Calcium', '1000', 'IU', 'once', 'after_food', ?, 'Take once daily after breakfast.', 45, 10, 'MED-VIT-D03')
     """, (today, today, today, today))
 
-    # Seed reminders
     cursor.execute("""
         INSERT INTO reminders (id, medicine_id, user_id, scheduled_time, label, status) VALUES
         (1, 1, 1, '08:00', 'Morning Dose', 'active'),
@@ -184,21 +269,20 @@ def seed_data(cursor):
         (5, 4, 1, '09:00', 'Post Breakfast Dose', 'active')
     """)
 
-    # Seed past medication history
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     two_days_ago = (now - timedelta(days=2)).strftime("%Y-%m-%d")
 
     history_records = [
-        (1, 1, 'Lisinopril', '10 mg', 'taken', f"{today} 07:30", f"{today} 07:32", 'Taken on time with water'),
+        (1, 4, 'Lisinopril', '10 mg', 'taken', f"{today} 07:30", f"{today} 07:32", 'Taken on time with water'),
         (1, 1, 'Metformin', '500 mg', 'taken', f"{today} 08:00", f"{today} 08:05", 'Taken after breakfast'),
-        (1, 1, 'Vitamin D3 & Calcium', '1000 IU', 'snoozed', f"{today} 09:00", f"{today} 09:15", 'Snoozed for 15 mins during commute'),
+        (1, 5, 'Vitamin D3 & Calcium', '1000 IU', 'snoozed', f"{today} 09:00", f"{today} 09:15", 'Snoozed for 15 mins during commute'),
         (1, 1, 'Metformin', '500 mg', 'taken', f"{yesterday} 08:00", f"{yesterday} 08:02", 'Taken on time'),
-        (1, 1, 'Metformin', '500 mg', 'taken', f"{yesterday} 20:30", f"{yesterday} 20:35", 'Taken on time'),
-        (1, 1, 'Atorvastatin', '20 mg', 'taken', f"{yesterday} 21:00", f"{yesterday} 21:03", 'Taken on time'),
-        (1, 1, 'Lisinopril', '10 mg', 'missed', f"{two_days_ago} 07:30", f"{two_days_ago} 09:00", 'Patient missed dose - caregiver alert dispatched'),
+        (1, 2, 'Metformin', '500 mg', 'taken', f"{yesterday} 20:30", f"{yesterday} 20:35", 'Taken on time'),
+        (1, 3, 'Atorvastatin', '20 mg', 'taken', f"{yesterday} 21:00", f"{yesterday} 21:03", 'Taken on time'),
+        (1, 4, 'Lisinopril', '10 mg', 'missed', f"{two_days_ago} 07:30", f"{two_days_ago} 09:00", 'Patient missed dose - caregiver alert dispatched'),
         (1, 1, 'Metformin', '500 mg', 'taken', f"{two_days_ago} 08:00", f"{two_days_ago} 08:12", 'Taken late'),
-        (1, 1, 'Atorvastatin', '20 mg', 'taken', f"{two_days_ago} 21:00", f"{two_days_ago} 21:05", 'Taken on time')
+        (1, 3, 'Atorvastatin', '20 mg', 'taken', f"{two_days_ago} 21:00", f"{two_days_ago} 21:05", 'Taken on time')
     ]
 
     for h in history_records:
@@ -207,13 +291,11 @@ def seed_data(cursor):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, h)
 
-    # Seed caregiver relation
     cursor.execute("""
         INSERT INTO caregiver_patient (caregiver_id, patient_id, access_level, status) VALUES
         (2, 1, 'Full Access & Emergency Escalation', 'Active')
     """)
 
-    # Seed emergency contacts
     cursor.execute("""
         INSERT INTO emergency_contacts (user_id, name, phone, relation, is_primary) VALUES
         (1, 'Divyadarshan Chauhan', '+91 98765 43211', 'Primary Caregiver / Family', 1),
@@ -221,7 +303,6 @@ def seed_data(cursor):
         (1, 'Anuj Sharma', '+91 98765 43213', 'Emergency Contact / Colleague', 0)
     """)
 
-    # Seed notifications
     cursor.execute("""
         INSERT INTO notifications (user_id, title, message, type, channel, status) VALUES
         (1, 'Low Stock Alert', 'Lisinopril 10mg has only 4 doses remaining. Please refill.', 'refill', 'push', 'unread'),
@@ -229,11 +310,49 @@ def seed_data(cursor):
         (1, 'Clinical Recommendation', 'Dr. Sathwik Chebrolu: BP readings look improved. Continue regular 10mg Lisinopril.', 'clinical', 'in_app', 'read')
     """)
 
-    # Seed clinical note
     cursor.execute("""
         INSERT INTO clinical_notes (clinician_id, patient_id, note, dosage_adjustment) VALUES
         (3, 1, 'Patient compliance is at 89% over the past 14 days. Glycemic control is stable. Advised to stay consistent with morning Lisinopril timing.', 'Maintain current dosage of Metformin 500mg BID and Lisinopril 10mg OD.')
     """)
 
+def init_db(db_path=None, force_reseed=False):
+    """
+    Initialize SQLite database, apply schema migrations, and seed default data.
+    Ensures a fresh clone works immediately without an existing .db file in git.
+    """
+    conn = get_connection(db_path)
+    apply_migrations(conn)
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM users")
+    count = cursor.fetchone()[0]
+
+    if count == 0 or force_reseed:
+        if force_reseed and count > 0:
+            cursor.execute("DELETE FROM medication_history")
+            cursor.execute("DELETE FROM reminders")
+            cursor.execute("DELETE FROM medicines")
+            cursor.execute("DELETE FROM clinical_notes")
+            cursor.execute("DELETE FROM notifications")
+            cursor.execute("DELETE FROM emergency_contacts")
+            cursor.execute("DELETE FROM caregiver_patient")
+            cursor.execute("DELETE FROM otp_codes")
+            cursor.execute("DELETE FROM sessions")
+            cursor.execute("DELETE FROM users")
+
+        seed_data(cursor)
+        conn.commit()
+        print(f"Database seeded successfully with default datasets.")
+
+    conn.close()
+    path = db_path or os.environ.get("DB_PATH", DEFAULT_DB_PATH)
+    print(f"Database initialized successfully at: {path}")
+
 if __name__ == "__main__":
-    init_db()
+    parser = argparse.ArgumentParser(description="MedRemind Database Management CLI")
+    parser.add_argument("--init", action="store_true", help="Initialize schema and migrations")
+    parser.add_argument("--seed", action="store_true", help="Force reseed default datasets")
+    parser.add_argument("--db", type=str, default=None, help="Custom database path")
+    args = parser.parse_args()
+
+    init_db(db_path=args.db, force_reseed=args.seed)

@@ -12,6 +12,29 @@ dist
 dist-ssr
 *.local
 
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+backend/*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -23,5 +46,3 @@ dist-ssr
 *.sln
 *.sw?
 .~lock.*
-__pycache__/
-*.pyc

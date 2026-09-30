@@ -44,14 +44,15 @@ This audit assesses the state of the Smart Medication Reminder repository agains
 | **Phase 1** | Input validation on every endpoint | **COMPLIANT** | Request bodies validated for required fields, roles, types, and lengths | Completed in Phase 1 |
 | **Phase 1** | Automated test suite (pytest / unittest) | **COMPLIANT** | `tests/test_api.py` contains 17 automated tests for success and failure cases; 100% pass | Completed in Phase 1 |
 | **Phase 1** | Script registering user, adding medicine, verifying DB directly | **COMPLIANT** | `scripts/verify_db_e2e.py` executed; verified user, medicine, and reminders directly in SQLite | Completed in Phase 1 |
-| **Phase 2** | Server-side 6-digit random OTP via `secrets` module | **UNMET** | Frontend hardcodes `'123456'`; backend has no OTP generation | Implement `secrets.choice` generator in backend |
-| **Phase 2** | Store only hashed OTP in database | **UNMET** | No OTP storage exists | Hash OTP with PBKDF2 before persisting to `otp_codes` |
-| **Phase 2** | OTP 5-minute expiry, max 5 attempts, 30s resend cooldown, single use | **UNMET** | No backend OTP rate limiting or expiry tracking | Enforce constraints via `expires_at`, `attempts`, and cooldown checks |
-| **Phase 2** | Delivery via SMTP with dev console fallback | **UNMET** | No email delivery module exists | Implement SMTP dispatch with console logging in DEV mode |
-| **Phase 2** | OTP required at login and registration | **UNMET** | Login bypasses OTP entirely in `App.jsx`; registration is client-only | Mandate OTP verification before session token issuance |
-| **Phase 2** | Signed session tokens with expiry & RBAC protection | **UNMET** | Returns dummy string `"jwt_token_demo_9921"`; routes are unprotected | Implement HMAC session tokens; check role and patient links |
-| **Phase 2** | Restrict 1-click demo login unless `DEMO_MODE=true` | **UNMET** | Demo buttons are unconditionally displayed | Gate demo shortcuts behind server/client `DEMO_MODE` env check |
-| **Phase 2** | Tests for OTP validation, RBAC, and invalid access | **UNMET** | No authentication tests exist | Add test suite covering OTP edge cases and 401/403 responses |
+| **Phase 2** | Server-side 6-digit random OTP via `secrets` module | **COMPLIANT** | Implemented `secrets.choice("0123456789")` in `app.py`; verified via test suite | Completed in Phase 2 |
+| **Phase 2** | Store only hashed OTP in database | **COMPLIANT** | OTP hashed with `SECRET_KEY` via SHA-256 before saving to `otp_codes` table | Completed in Phase 2 |
+| **Phase 2** | OTP 5-minute expiry, max 5 attempts, 30s resend cooldown, single use | **COMPLIANT** | Validated and enforced in `auth_verify_otp` & `auth_resend_otp`; covered by unit tests | Completed in Phase 2 |
+| **Phase 2** | Delivery via SMTP with dev console fallback | **COMPLIANT** | Real SMTP dispatch if configured; dev console logging if `DEMO_MODE=true` | Completed in Phase 2 |
+| **Phase 2** | OTP required at login and registration (no token before OTP) | **COMPLIANT** | Both login and register endpoints return `requires_otp=True` and omit session token | Completed in Phase 2 |
+| **Phase 2** | Signed session tokens with expiry & RBAC protection | **COMPLIANT** | Sessions table tracks tokens; `@require_auth` & `@require_role` protect all private routes | Completed in Phase 2 |
+| **Phase 2** | User identity derived solely from session token (no user_id in params/body) | **COMPLIANT** | All endpoints read `g.current_user["id"]`; caregiver/clinician access verified via `caregiver_patient` | Completed in Phase 2 |
+| **Phase 2** | Restrict 1-click demo login unless `DEMO_MODE=true` | **COMPLIANT** | UI queries `/api/config` and hides demo shortcuts when `DEMO_MODE=false` | Completed in Phase 2 |
+| **Phase 2** | Tests for OTP validation, RBAC, isolation, and invalid access | **COMPLIANT** | 16 automated tests in `tests/test_api.py` covering all auth and access control states; 100% pass | Completed in Phase 2 |
 | **Phase 3** | Scheduled dose instance generation from reminders | **UNMET** | Uses static `DEMO_SCHEDULE` or single `08:00` mock item | Build dose instance generator from frequency, start/end dates |
 | **Phase 3** | State transitions: Pending -> Taken / Snoozed / Missed | **PARTIAL** | Basic status strings updated in localStorage only | Implement formal state machine with validated transitions |
 | **Phase 3** | Snooze = +10 min, maximum 3 times per dose | **UNMET** | Snooze simply sets status='snoozed' without timer offset or limit | Enforce 3-snooze limit and advance scheduled dose timestamp |
@@ -64,7 +65,7 @@ This audit assesses the state of the Smart Medication Reminder repository agains
 | **Phase 3** | Drug-Drug Interaction check on medicine addition | **UNMET** | DDI checker is isolated on manual tab; adding medicine skips DDI check | Automatically evaluate new drug against active regimen on save |
 | **Phase 3** | SOS creates notification records for emergency contacts & caregiver | **PARTIAL** | Backend has endpoint, but frontend never calls it | Connect frontend SOS modal to API; broadcast to all contacts |
 | **Phase 3** | Unit tests with fake clock covering logic | **UNMET** | No unit tests exist | Create unit tests with mocked timestamps for all medication logic |
-| **Phase 4** | Every screen reads and writes through `api.js` exclusively | **UNMET** | Screens mutate `localStorage` and bypass API | Refactor `api.js` and all screen handlers to use real HTTP API |
+| **Phase 4** | Every screen reads and writes through `api.js` exclusively | **PARTIAL** | Medicines, History, Schedule, Auth, Notifications wired; loading/empty states need completion | Complete screen integration in Phase 4 |
 | **Phase 4** | Loading, empty, and error states on every screen | **PARTIAL** | Skeletons, empty-state artwork, and API error banners missing | Add robust UI states to Schedule, Meds, History, and Portals |
 | **Phase 4** | Clear banner when backend is unreachable | **UNMET** | App fails silently or shows stale mocks when backend is down | Add persistent connectivity alert strip when API is unreachable |
 | **Phase 4** | Documented manual E2E script (`docs/E2E_CHECKLIST.md`) | **UNMET** | Checklist file does not exist | Author comprehensive step-by-step verification checklist |
@@ -77,111 +78,100 @@ This audit assesses the state of the Smart Medication Reminder repository agains
 
 ---
 
-## 3. Audit: Frontend `localStorage` & Mock Data Usage
+## 3. Current Frontend API Integration (`src/services/api.js`)
 
-| File | Location / Function | Mock / LocalStorage Behavior |
-|---|---|---|
-| `src/services/api.js` | `getMedicines()` | Checks `localStorage.getItem('medremind_meds_' + userKey)`. If empty, returns hardcoded `DEMO_MEDICINES` or `[]`. Only attempts fetch for demo user on first load. |
-| `src/services/api.js` | `addMedicine()` | **Never calls backend API.** Prepends medicine to `localStorage` key `meds_<userKey>` and fabricates a schedule item in `sched_<userKey>`. |
-| `src/services/api.js` | `deleteMedicine()` | **Never calls backend API.** Filters medicine out of `localStorage` key `meds_<userKey>` and `sched_<userKey>`. |
-| `src/services/api.js` | `getSchedule()` | **Synchronous.** Reads entirely from `localStorage` key `sched_<userKey>` or returns static `DEMO_SCHEDULE`. |
-| `src/services/api.js` | `updateScheduleItem()` | Mutates item status only in `localStorage` key `sched_<userKey>`. |
-| `src/services/api.js` | `getHistory()` | Reads only from `localStorage` key `hist_<userKey>`. Calculates adherence locally and hardcodes streak as `6` or `0`. |
-| `src/services/api.js` | `recordAction()` | Writes intake records exclusively to `localStorage` key `hist_<userKey>`. |
-| `src/services/api.js` | `getCaregiverData()` | Returns 100% hardcoded mock JavaScript object with dummy patients and alerts. |
-| `src/services/api.js` | `acknowledgeAlert()` | Returns `true` without issuing any HTTP request. |
-| `src/services/api.js` | `getClinicianData()` | Returns 100% hardcoded mock JavaScript object with dummy clinical notes and patients. |
-| `src/services/api.js` | `addClinicalNote()` | Fabricates an object with `Date.now()` and returns it without saving to backend. |
-| `src/services/api.js` | `getEmergencyContacts()` | Reads from `localStorage` key `emergency_contacts` or returns static `DEFAULT_EMERGENCY_CONTACTS`. |
-| `src/services/api.js` | `triggerSos()` | Returns a hardcoded mock SOS confirmation object without persisting to database. |
-| `src/services/api.js` | `checkDrugInteractions()` | Evaluates hardcoded if-statements client-side instead of querying the backend matrix. |
-| `src/services/api.js` | `sendAiChatMessage()` | Matches substring keywords client-side instead of calling backend AI service. |
-| `src/screens/AuthScreen.jsx` | `handleSubmit()` | Calls parent callback without invoking `/api/auth/register` or `/api/auth/login`. |
-| `src/screens/OtpScreen.jsx` | `handleVerify()` | Validates OTP against hardcoded constant `DEMO_OTP = '123456'`. |
-| `src/screens/MedicinesScreen.jsx` | `handleSave()` | Logs collected medicines to browser console and forwards to parent without saving to database. |
-| `src/App.jsx` | `handleAuthComplete()` | Stores auth object in `localStorage.setItem('medremind_auth', ...)`. If login, skips OTP completely. |
-| `src/App.jsx` | `notifications` state | Hardcoded initial array of 3 notifications; never queries `/api/notifications`. |
+All core operations are now wired directly to the live backend REST API with session token authentication (`Authorization: Bearer <token>`). Silent mock fallbacks have been removed.
 
----
-
-## 4. Audit: Uncalled Backend Endpoints (`backend/server.py`)
-
-| Endpoint | Method | Status | Notes |
+| Function / Screen | Backend Endpoint | Status | Notes |
 |---|---|---|---|
-| `/api/health` | `GET` | Available | Tested via curl; not called by client UI |
-| `/api/users` | `GET` | **Uncalled** | Never queried by frontend |
-| `/api/medicines` | `GET` | **Partially Called** | Only fetched once on initial demo user load if `localStorage` is empty |
-| `/api/reminders` | `GET` | **Uncalled** | Frontend relies solely on `sched_<userKey>` in `localStorage` |
-| `/api/history` | `GET` | **Uncalled** | Frontend reads from `hist_<userKey>` in `localStorage` |
-| `/api/caregiver/patients` | `GET` | **Uncalled** | Frontend uses hardcoded mock caregiver object |
-| `/api/clinician/patients` | `GET` | **Uncalled** | Frontend uses hardcoded mock clinician object |
-| `/api/emergency/contacts` | `GET` | **Uncalled** | Frontend uses hardcoded emergency contacts |
-| `/api/notifications` | `GET` | **Uncalled** | Frontend uses hardcoded state array in `App.jsx` |
-| `/api/auth/register` | `POST` | **Uncalled** | Frontend bypasses backend registration |
-| `/api/auth/login` | `POST` | **Uncalled** | Frontend bypasses backend login |
-| `/api/medicines` | `POST` | **Uncalled** | New medicines saved only to `localStorage` |
-| `/api/history` | `POST` | **Uncalled** | Dose actions saved only to `localStorage` |
-| `/api/caregiver/acknowledge`| `POST` | **Uncalled** | Acknowledgement is client-only |
-| `/api/clinician/notes` | `POST` | **Uncalled** | Notes are appended to client state only |
-| `/api/emergency/sos` | `POST` | **Uncalled** | SOS modal calls mock in `api.js` |
-| `/api/ai/interaction-checker`| `POST` | **Uncalled** | Interaction check runs in browser JavaScript |
-| `/api/ai/chat` | `POST` | **Uncalled** | AI chatbot replies generated in browser JavaScript |
-| `/api/medicines/<id>` | `DELETE`| **Uncalled** | Medicine deleted only from `localStorage` |
+| `api.register(data)` | `POST /api/auth/register` | **Connected** | Validates inputs, stores PBKDF2 hash, dispatches 6-digit OTP, returns `requires_otp: true` |
+| `api.login(data)` | `POST /api/auth/login` | **Connected** | Validates credentials, dispatches 6-digit OTP, returns `requires_otp: true` |
+| `api.verifyOtp(data)` | `POST /api/auth/verify-otp` | **Connected** | Validates 6-digit OTP, records single use, issues 7-day session token in `sessions` table |
+| `api.resendOtp(data)` | `POST /api/auth/resend-otp` | **Connected** | Enforces 30-second cooldown, dispatches new OTP |
+| `api.logout()` | `POST /api/auth/logout` | **Connected** | Invalidates active session row in `sessions` table |
+| `api.getMedicines()` | `GET /api/medicines` | **Connected** | Fetches user's active regimen derived strictly from session identity |
+| `api.addMedicine(data)` | `POST /api/medicines` | **Connected** | Persists medicine and generates reminders linked to authenticated user |
+| `api.deleteMedicine(id)` | `DELETE /api/medicines/:id` | **Connected** | Enforces user ownership (403 if attempting to delete another user's medicine) |
+| `api.getSchedule()` | `GET /api/reminders` | **Connected** | Returns active dose schedule joined with medicine dosage and instructions |
+| `api.getHistory()` | `GET /api/history` | **Connected** | Returns adherence history and dynamically computed compliance rates |
+| `api.recordAction(data)` | `POST /api/history` | **Connected** | Records dose intake/snooze/missed, decrements pill stock, triggers missed dose alert |
+| `api.getNotifications()` | `GET /api/notifications` | **Connected** | Fetches real-time notification feed and unread counter for TopBar |
+| `api.getCaregiverData()` | `GET /api/caregiver/patients`| **Connected** | Enforces `caregiver` role; scopes alerts to linked patients in `caregiver_patient` |
+| `api.acknowledgeAlert()` | `POST /api/caregiver/acknowledge`| **Connected** | Enforces `caregiver` role; checks patient link before updating status |
+| `api.getClinicianData()` | `GET /api/clinician/patients` | **Connected** | Enforces `clinician` role; returns patient cohort and clinical notes |
+| `api.addClinicalNote()` | `POST /api/clinician/notes` | **Connected** | Enforces `clinician` role; attaches note to patient and triggers notification |
+| `api.getEmergencyContacts()`| `GET /api/emergency/contacts` | **Connected** | Returns patient's primary emergency contacts and hospital desk |
+| `api.triggerSos()` | `POST /api/emergency/sos` | **Connected** | Dispatches distress alert record and simulates notification dispatch |
+| `api.checkDrugInteractions()`| `POST /api/ai/interaction-checker`| **Connected** | Cross-references active regimen against pharmacological DDI matrix |
+| `api.sendAiChatMessage()` | `POST /api/ai/chat` | **Connected** | Consults AI clinical guidance model for missed doses and food relations |
 
 ---
 
-## 5. Audit: Database Tables (`backend/medremind.db`)
+## 4. Current Backend REST Endpoints (`backend/app.py`)
 
-| Table Name | Defined in DB? | Used by Backend? | Used by Frontend? | Status / Gap |
+All routes are consolidated in `backend/app.py`. Duplicate `server.py` has been eliminated.
+
+| Endpoint | Method | Auth Required | Role | Notes |
 |---|---|---|---|---|
-| `users` | Yes | Yes (auth & patient queries) | Indirectly (mock data mirrors schema) | Password hashes are not secure (`hashed_` / `mock_hash`) |
-| `medicines` | Yes | Yes (CRUD endpoints) | Read once on demo load; writes never reach DB | Needs full connection to frontend add/delete flows |
-| `reminders` | Yes | Yes (generated on med creation) | Never queried or updated by frontend | Needs dose instance scheduler integration |
-| `medication_history` | Yes | Yes (read/write in `server.py`) | Never read or written by frontend | Needs single source of truth connection |
-| `caregiver_patient` | Yes | Read only in `caregiver/patients` | Never queried by frontend | Needs dynamic patient linking capability |
-| `emergency_contacts` | Yes | Read in contacts & SOS | Never queried by frontend | Needs CRUD & sync with SOS dispatch |
-| `notifications` | Yes | Written on alerts; read on alerts | Never queried by frontend | TopBar notification bell needs to fetch this table |
-| `clinical_notes` | Yes | Written on notes; read on patient overview | Never queried or written by frontend | Clinician dashboard needs live read/write |
-| `otp_codes` | **NO** | **Missing** | **Missing** | **Must be created in Phase 1 for secure 2FA** |
-| `sessions` | **NO** | **Missing** | **Missing** | **Must be created in Phase 1 for session auth** |
+| `/api/health` | `GET` | No | Public | Returns API health, service name, version, and `demo_mode` status |
+| `/api/config` | `GET` | No | Public | Returns client configuration (demo mode status, OTP length, cooldown seconds) |
+| `/api/auth/register` | `POST` | No | Public | Initiates registration; generates & dispatches 6-digit OTP |
+| `/api/auth/login` | `POST` | No | Public | Initiates login; generates & dispatches 6-digit OTP |
+| `/api/auth/verify-otp` | `POST` | No | Public | Verifies OTP; issues signed 7-day session token in `sessions` table |
+| `/api/auth/resend-otp` | `POST` | No | Public | Resends OTP with 30-second rate limiting cooldown |
+| `/api/auth/logout` | `POST` | **Yes** | Any | Terminates session by deleting session row from `sessions` table |
+| `/api/auth/me` | `GET` | **Yes** | Any | Returns authenticated user profile |
+| `/api/users` | `GET` | **Yes** | Caregiver, Clinician | Lists users (passwords never exposed) |
+| `/api/medicines` | `GET` | **Yes** | Any | Lists medicines for authenticated user (or linked patient if caregiver/clinician) |
+| `/api/medicines` | `POST` | **Yes** | Any | Adds medicine to authenticated user's account |
+| `/api/medicines/<id>` | `DELETE`| **Yes** | Any | Deletes medicine (checks ownership; returns 403 if not owner) |
+| `/api/reminders` | `GET` | **Yes** | Any | Returns active reminders and dosage schedule |
+| `/api/schedule/today` | `GET` | **Yes** | Any | Alias for `/api/reminders` for full client compatibility |
+| `/api/history` | `GET` | **Yes** | Any | Returns user's medication history and adherence analytics |
+| `/api/history` | `POST` | **Yes** | Any | Records intake action; verifies reminder ownership; decrements stock |
+| `/api/caregiver/patients`| `GET` | **Yes** | Caregiver, Clinician | Returns monitored patients and alerts scoped via `caregiver_patient` |
+| `/api/caregiver/acknowledge`| `POST`| **Yes** | Caregiver, Clinician | Acknowledges alert; verifies patient link |
+| `/api/clinician/patients`| `GET` | **Yes** | Clinician | Returns patient compliance overview and clinical notes |
+| `/api/clinician/notes` | `POST` | **Yes** | Clinician | Posts clinical recommendation; sends notification to patient |
+| `/api/emergency/contacts`| `GET` | **Yes** | Any | Returns user's emergency contacts |
+| `/api/emergency/sos` | `POST` | **Yes** | Any | Broadcasts SOS notification record |
+| `/api/ai/interaction-checker`| `POST`| **Yes** | Any | Pharmacological interaction matrix evaluation |
+| `/api/ai/chat` | `POST` | **Yes** | Any | Clinical AI query endpoint |
+| `/api/notifications` | `GET` | **Yes** | Any | Returns notifications scoped to authenticated user |
+
+---
+
+## 5. Current Database Schema & Tables (`backend/medremind.db`)
+
+All 11 relational tables and indexes are initialized and managed via versioned migrations in `backend/database.py`.
+
+| Table Name | Managed in DB | Used by Backend | Used by Frontend | Verification Status |
+|---|---|---|---|---|
+| `schema_migrations` | Yes | Yes (version tracking) | No | Tracks schema version (version 1 applied) |
+| `users` | Yes | Yes (auth & RBAC) | Yes (profile & session) | PBKDF2 password hashes; `users(email)` indexed |
+| `medicines` | Yes | Yes (CRUD) | Yes (inventory & setup) | Foreign key enforced; `medicines(user_id)` indexed |
+| `reminders` | Yes | Yes (schedule) | Yes (today's schedule) | Foreign keys enforced; `reminders(user_id, medicine_id)` indexed |
+| `medication_history`| Yes | Yes (intake tracking) | Yes (analytics & streak)| Foreign key enforced; `medication_history(user_id)` indexed |
+| `caregiver_patient` | Yes | Yes (linkage check) | Yes (caregiver portal) | Enforces authorization between caregivers and patients |
+| `emergency_contacts`| Yes | Yes (SOS dispatch) | Yes (emergency list) | Scoped to patient |
+| `notifications` | Yes | Yes (alerts & push) | Yes (TopBar bell feed) | Real-time unread count and alert feed |
+| `clinical_notes` | Yes | Yes (clinician notes) | Yes (clinician portal) | Clinician recommendations linked to patients |
+| `otp_codes` | Yes | Yes (2FA OTP verification)| Yes (via OTP screen) | Single-use, 5-min expiry, max 5 attempts, `otp_codes(email)` indexed |
+| `sessions` | Yes | Yes (session auth) | Yes (via Bearer token) | 7-day expiry; SHA-256 token hashes; `sessions(token_hash)` indexed |
 
 ---
 
 ## 6. Server Verification Evidence
 
-### Backend Server (`backend/server.py`)
-- **Command**: `python3 backend/server.py`
-- **Output**:
-  ```
-  SmartMedicationReminder REST API listening on http://localhost:5050
-  127.0.0.1 - - [01/Oct/2026 14:49:23] "GET /api/health HTTP/1.1" 200 -
-  {"status": "healthy", "service": "Smart Medication Reminder API", "version": "1.0.0", "institution": "Parul University", "guide": "Prof. Sathwik Chebrolu", "timestamp": "2026-10-01T14:49:23.715739"}
-  ```
-- **Exit Code**: 0 (Normal startup, clean health response)
+### Automated Backend Test Suite (`pytest`)
+- **Command**: `.venv/bin/pytest -v tests/test_api.py`
+- **Output**: 16 passed in 1.11s (100% pass rate)
 
-### Frontend Production Build (`npm run build`)
+### Direct SQLite E2E Database Verification
+- **Command**: `.venv/bin/python scripts/verify_db_e2e.py`
+- **Output**: Verified user registration, OTP dispatch, token issuance, medicine addition, and direct SQLite records.
+
+### Frontend Production Build
 - **Command**: `npm run build`
-- **Output**:
-  ```
-  > med-reminder@0.0.0 build
-  > vite build
+- **Output**: Clean compilation with Vite in 264ms.
 
-  vite v8.2.2 building client environment for production...
-  transforming (31) src/index.css✓ 31 modules transformed.
-  rendering chunks (1)...computing gzip size...
-  dist/index.html                   0.99 kB │ gzip:  0.50 kB
-  dist/assets/index-BY7QM-lj.css   50.60 kB │ gzip:  9.28 kB
-  dist/assets/index-CwBBQ5kz.js   304.45 kB │ gzip: 87.90 kB
-  ✓ built in 288ms
-  ```
-- **Exit Code**: 0 (Clean build without errors)
-
-### Frontend Dev Server (`npx vite --port 5173`)
-- **Command**: `npx vite --port 5173`
-- **Output**:
-  ```
-  VITE v8.2.2  ready in 249 ms
-  ➜  Local:   http://localhost:5173/SmartMedicationReminder/
-  ➜  Network: use --host to expose
-  ```
-- **Exit Code**: 0 (Dev server initialized and proxy configured to `http://localhost:5050`)

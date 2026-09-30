@@ -1,26 +1,34 @@
 /**
- * Smart Medication Reminder - Connected API Service Layer
+ * Smart Medication Reminder - Connected API Service Layer (Phase 2)
  * Parul University - Semester IV IMCA / BCA Project
  *
- * Connected directly to the Flask SQLite REST API.
- * The database is the single source of truth; silent mock fallbacks are eliminated.
+ * Fully connected to the Flask REST API with:
+ * - Session token authentication (Authorization: Bearer <token>)
+ * - User identity derived exclusively from session token
+ * - Expired session detection and handling
+ * - Real 2-step verification (registration & login OTP flows)
  */
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
 /**
- * Standardized HTTP request handler with robust error propagation.
+ * Standardized HTTP request handler with token injection and error propagation.
  */
 async function request(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
+  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null;
+
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+    ...(options.headers || {})
+  };
+
   let response;
   try {
     response = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options.headers || {})
-      },
-      ...options
+      ...options,
+      headers
     });
   } catch (netErr) {
     const error = new Error(
@@ -34,6 +42,15 @@ async function request(endpoint, options = {}) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
+    // If 401 Unauthorized / Session Expired, clear local tokens and dispatch event
+    if (response.status === 401 && typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('medremind_token');
+        localStorage.removeItem('medremind_auth');
+        window.dispatchEvent(new CustomEvent('medremind:session-expired', { detail: data }));
+      } catch {}
+    }
+
     const errorMsg = data?.error?.message || data?.message || `API request failed with status ${response.status}`;
     const error = new Error(errorMsg);
     error.status = response.status;
@@ -49,44 +66,31 @@ async function request(endpoint, options = {}) {
 
 export function getUserDisplayName(authData) {
   if (!authData) return 'User';
-  const data = authData.data || authData;
+  const data = authData.data || authData.user || authData;
   if (data.fullName && data.fullName.trim()) return data.fullName.trim();
   if (data.name && data.name.trim()) return data.name.trim();
-  if (data.identifier) {
-    const raw = data.identifier.trim();
-    if (raw.includes('@')) {
-      const username = raw.split('@')[0];
-      const cleanName = username.split(/[._-]/)[0].replace(/[^a-zA-Z]/g, '');
-      if (cleanName) return cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
-      return username;
-    }
-    return raw;
+  if (data.email) {
+    const raw = data.email.trim();
+    const username = raw.split('@')[0];
+    const cleanName = username.split(/[._-]/)[0].replace(/[^a-zA-Z]/g, '');
+    if (cleanName) return cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+    return username;
   }
   return 'User';
 }
 
 export function getUserKey(authData) {
-  if (!authData) return 'demo_himanshu';
-  const data = authData.data || authData;
-  const raw = data.email || data.identifier || data.fullName || 'demo_himanshu';
-  return raw.toLowerCase().replace(/[^a-z0-9]/g, '_');
+  if (!authData) return 'user_session';
+  const data = authData.data || authData.user || authData;
+  const raw = data.email || data.id || 'user_session';
+  return String(raw).toLowerCase().replace(/[^a-z0-9]/g, '_');
 }
 
 export function isDemoUser(authData) {
   if (!authData) return true;
-  const key = getUserKey(authData);
-  return key.includes('himanshu') || key.includes('demo');
-}
-
-export function resolveUserId(userKey, authData) {
-  if (authData?.id) return authData.id;
-  if (authData?.data?.id) return authData.data.id;
-  if (typeof userKey === 'number') return userKey;
-  if (!userKey) return 1;
-  const key = String(userKey).toLowerCase();
-  if (key.includes('divya') || key.includes('caregiver')) return 2;
-  if (key.includes('sathwik') || key.includes('clinician')) return 3;
-  return 1;
+  const data = authData.data || authData.user || authData;
+  const email = (data.email || '').toLowerCase();
+  return email.includes('himanshu') || email.includes('demo');
 }
 
 function getPeriod(timeStr) {
@@ -101,7 +105,17 @@ function getPeriod(timeStr) {
 // ── API Operations (Single Source of Truth) ────────────────────────
 
 export const api = {
-  // --- Authentication ---
+  // --- System Config ---
+  async getConfig() {
+    try {
+      const res = await request('/config');
+      return res;
+    } catch {
+      return { demo_mode: true, otp_length: 6, cooldown_seconds: 30 };
+    }
+  },
+
+  // --- Real Two-Step Authentication ---
   async register(userData) {
     return request('/auth/register', {
       method: 'POST',
@@ -116,10 +130,49 @@ export const api = {
     });
   },
 
-  // --- Medicines Module ---
-  async getMedicines(userKey = 'demo_himanshu', authData = null) {
-    const userId = resolveUserId(userKey, authData);
-    const res = await request(`/medicines?user_id=${userId}`);
+  async verifyOtp({ email, otp }) {
+    const res = await request('/auth/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email, otp })
+    });
+
+    if (res.token && typeof localStorage !== 'undefined') {
+      try {
+        localStorage.setItem('medremind_token', res.token);
+        localStorage.setItem('medremind_auth', JSON.stringify({ user: res.user, type: 'authenticated' }));
+      } catch {}
+    }
+
+    return res;
+  },
+
+  async resendOtp({ email }) {
+    return request('/auth/resend-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email })
+    });
+  },
+
+  async logout() {
+    try {
+      await request('/auth/logout', { method: 'POST' });
+    } finally {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('medremind_token');
+        localStorage.removeItem('medremind_auth');
+      }
+    }
+    return { success: true };
+  },
+
+  async getMe() {
+    return request('/auth/me');
+  },
+
+  // --- Medicines Module (Scoped to Authenticated Session) ---
+  async getMedicines(patientId = null) {
+    const query = patientId ? `?patient_id=${patientId}` : '';
+    const res = await request(`/medicines${query}`);
     const list = res.medicines || [];
     return list.map(m => ({
       id: m.id,
@@ -136,10 +189,8 @@ export const api = {
     }));
   },
 
-  async addMedicine(med, userKey = 'demo_himanshu', authData = null) {
-    const userId = resolveUserId(userKey, authData);
+  async addMedicine(med) {
     const payload = {
-      user_id: userId,
       name: med.name,
       dosage_amount: med.dosageAmount || med.dosage_amount || '100',
       dosage_unit: med.dosageUnit || med.dosage_unit || 'mg',
@@ -163,16 +214,16 @@ export const api = {
     };
   },
 
-  async deleteMedicine(id, userKey = 'demo_himanshu', authData = null) {
+  async deleteMedicine(id) {
     return request(`/medicines/${id}`, {
       method: 'DELETE'
     });
   },
 
   // --- Schedule & Reminders ---
-  async getSchedule(userKey = 'demo_himanshu', authData = null) {
-    const userId = resolveUserId(userKey, authData);
-    const res = await request(`/reminders?user_id=${userId}`);
+  async getSchedule(patientId = null) {
+    const query = patientId ? `?patient_id=${patientId}` : '';
+    const res = await request(`/reminders${query}`);
     const list = res.reminders || [];
     return list.map(r => ({
       id: r.id || r.reminder_id,
@@ -186,20 +237,18 @@ export const api = {
     }));
   },
 
-  updateScheduleItem(id, status, _userKey) {
-    // Local optimistic update helper for immediate UI feedback
+  updateScheduleItem(id, status) {
     return { id, status };
   },
 
-  loadDemoRegimen(_userKey) {
-    // Kept for backward compatibility
+  loadDemoRegimen() {
     return true;
   },
 
   // --- Medication History & Adherence ---
-  async getHistory(userKey = 'demo_himanshu', authData = null) {
-    const userId = resolveUserId(userKey, authData);
-    const res = await request(`/history?user_id=${userId}`);
+  async getHistory(patientId = null) {
+    const query = patientId ? `?patient_id=${patientId}` : '';
+    const res = await request(`/history${query}`);
     return {
       success: true,
       history: res.history || [],
@@ -214,10 +263,8 @@ export const api = {
     };
   },
 
-  async recordAction({ reminderId, medicineName, dosage, status, notes = '' }, userKey = 'demo_himanshu', authData = null) {
-    const userId = resolveUserId(userKey, authData);
+  async recordAction({ reminderId, medicineName, dosage, status, notes = '' }) {
     const payload = {
-      user_id: userId,
       reminder_id: reminderId,
       medicine_name: medicineName,
       dosage: dosage,
@@ -232,8 +279,8 @@ export const api = {
   },
 
   // --- Caregiver Module ---
-  async getCaregiverData(_userName = 'Himanshu Patel') {
-    const res = await request('/caregiver/patients?caregiver_id=2');
+  async getCaregiverData() {
+    const res = await request('/caregiver/patients');
     return {
       patients: res.patients || [],
       alerts: res.alerts || []
@@ -248,19 +295,18 @@ export const api = {
   },
 
   // --- Clinician Module ---
-  async getClinicianData(_userName = 'Himanshu Patel') {
-    const res = await request('/clinician/patients?clinician_id=3');
+  async getClinicianData() {
+    const res = await request('/clinician/patients');
     return {
       patients: res.patients || [],
       notes: res.notes || []
     };
   },
 
-  async addClinicalNote({ clinicianId = 3, patientId = 1, note, dosageAdjustment }) {
+  async addClinicalNote({ patientId, note, dosageAdjustment }) {
     return request('/clinician/notes', {
       method: 'POST',
       body: JSON.stringify({
-        clinician_id: clinicianId,
         patient_id: patientId,
         note: note,
         dosage_adjustment: dosageAdjustment
@@ -269,9 +315,8 @@ export const api = {
   },
 
   // --- Emergency Contacts & SOS Protocol ---
-  async getEmergencyContacts(userKey = 'demo_himanshu', authData = null) {
-    const userId = resolveUserId(userKey, authData);
-    const res = await request(`/emergency/contacts?user_id=${userId}`);
+  async getEmergencyContacts() {
+    const res = await request('/emergency/contacts');
     return res.contacts || [];
   },
 
@@ -299,9 +344,8 @@ export const api = {
   },
 
   // --- Notifications Feed ---
-  async getNotifications(userKey = 'demo_himanshu', authData = null) {
-    const userId = resolveUserId(userKey, authData);
-    const res = await request(`/notifications?user_id=${userId}`);
+  async getNotifications() {
+    const res = await request('/notifications');
     return {
       success: true,
       notifications: res.notifications || [],

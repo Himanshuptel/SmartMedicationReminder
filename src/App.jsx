@@ -76,18 +76,38 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [screen]);
 
+  // Handle session expiration redirect
+  useEffect(() => {
+    const handleExpired = () => {
+      setAuthData(null);
+      setScreen(SCREENS.AUTH);
+    };
+    window.addEventListener('medremind:session-expired', handleExpired);
+    return () => window.removeEventListener('medremind:session-expired', handleExpired);
+  }, []);
+
   const handleAuthComplete = (payload) => {
     setAuthData(payload);
-    try { localStorage.setItem('medremind_auth', JSON.stringify(payload)); } catch {}
-    if (payload?.type === 'login') {
-      setScreen(SCREENS.DASHBOARD);
-    } else {
-      setScreen(SCREENS.OTP);
-    }
+    setScreen(SCREENS.OTP);
   };
 
-  const handleOtpVerified = () => {
-    setScreen(SCREENS.MEDICINES);
+  const handleOtpVerified = (verifiedUser, token) => {
+    const payload = {
+      type: 'authenticated',
+      data: verifiedUser,
+      token: token
+    };
+    setAuthData(payload);
+    try {
+      localStorage.setItem('medremind_auth', JSON.stringify(payload));
+      localStorage.setItem('medremind_token', token);
+    } catch {}
+
+    if (authData?.type === 'signup') {
+      setScreen(SCREENS.MEDICINES);
+    } else {
+      setScreen(SCREENS.DASHBOARD);
+    }
   };
 
   const handleMedicinesSaved = (medicines) => {
@@ -143,23 +163,12 @@ export default function App() {
   const isDemo = isDemoUser(authData);
 
   const handleSwitchToDemo = () => {
-    const demoAuth = {
-      type: 'login',
-      data: {
-        fullName: 'Himanshu Patel',
-        email: 'himanshu@paruluniversity.ac.in',
-        identifier: 'himanshu@paruluniversity.ac.in',
-        role: 'patient'
-      }
-    };
-    setAuthData(demoAuth);
-    try { localStorage.setItem('medremind_auth', JSON.stringify(demoAuth)); } catch {}
-    setScreen(SCREENS.DASHBOARD);
+    setScreen(SCREENS.AUTH);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await api.logout();
     setAuthData(null);
-    try { localStorage.removeItem('medremind_auth'); } catch {}
     setScreen(SCREENS.AUTH);
   };
 

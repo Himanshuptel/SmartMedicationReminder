@@ -16,8 +16,9 @@ DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "medremind.db")
 def get_connection(db_path=None):
     """
     Establish SQLite connection with foreign key enforcement and row factory.
+    Respects DATABASE_PATH and DB_PATH env vars.
     """
-    path = db_path or os.environ.get("DB_PATH", DEFAULT_DB_PATH)
+    path = db_path or os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH") or DEFAULT_DB_PATH
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
@@ -345,7 +346,7 @@ def init_db(db_path=None, force_reseed=False):
         print(f"Database seeded successfully with default datasets.")
 
     conn.close()
-    path = db_path or os.environ.get("DB_PATH", DEFAULT_DB_PATH)
+    path = db_path or os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH", DEFAULT_DB_PATH)
     print(f"Database initialized successfully at: {path}")
 
 if __name__ == "__main__":

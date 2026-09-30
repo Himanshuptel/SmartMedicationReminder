@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Smart Medication Reminder - Direct Database E2E Verification Script
+Smart Medication Reminder - Direct Database E2E Verification Script (Phase 2)
 Parul University - Semester IV IMCA / BCA Project
 
-Verifies the single source of truth architecture:
-1. Registers a new user via API
-2. Adds a new medication regimen for that user via API
-3. Directly opens SQLite (bypassing API) to verify user, medicine, and auto-generated reminders
+Verifies the single source of truth architecture with Phase 2 authentication:
+1. Registers a new user via API (receives OTP challenge)
+2. Verifies 6-digit OTP and receives signed session token
+3. Adds a new medication regimen using the session token (user identity derived from token)
+4. Directly opens SQLite (bypassing API) to verify user, session, medicine, and auto-generated reminders
 """
 import sys
 import os
@@ -16,16 +17,22 @@ import time
 # Ensure backend directory is in python search path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
 
+# Use DATABASE_PATH if provided, else backend/medremind.db
+db_path = os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH") or os.path.join(os.path.dirname(__file__), "..", "backend", "medremind.db")
+os.environ["DATABASE_PATH"] = db_path
+os.environ["DEMO_MODE"] = "true"
+os.environ["SECRET_KEY"] = "verification-script-secret-key-32chars"
+
 from app import app
-from database import DEFAULT_DB_PATH, init_db
+from database import init_db
 
 def run_verification():
     print("=" * 70)
-    print("PHASE 1 VERIFICATION: Direct SQLite Database Verification")
+    print("E2E VERIFICATION: Two-Step Auth & Direct SQLite Database Verification")
     print("=" * 70)
 
     # Ensure database is initialized
-    init_db(DEFAULT_DB_PATH)
+    init_db(db_path)
 
     timestamp = int(time.time())
     test_email = f"verified_patient_{timestamp}@paruluniversity.ac.in"
@@ -34,7 +41,7 @@ def run_verification():
 
     with app.test_client() as client:
         # Step 1: Register User via API
-        print(f"\n[1/3] Registering new user via API: {test_email}...")
+        print(f"\n[1/4] Registering new user via API: {test_email}...")
         reg_payload = {
             "fullName": test_name,
             "email": test_email,
@@ -45,13 +52,25 @@ def run_verification():
         reg_res = client.post("/api/auth/register", json=reg_payload)
         assert reg_res.status_code == 201, f"Registration failed: {reg_res.get_json()}"
         reg_data = reg_res.get_json()
-        user_id = reg_data["user"]["id"]
-        print(f" -> User created with ID: {user_id}")
+        assert reg_data["requires_otp"] is True, "Expected requires_otp=True"
+        assert "token" not in reg_data, "No token should be issued prior to OTP verification"
+        print(f" -> Registration initiated. OTP dispatched to {test_email}.")
 
-        # Step 2: Add Medicine via API
-        print(f"\n[2/3] Adding new medicine via API for user ID {user_id}...")
+        # Step 2: Verify OTP and acquire session token
+        otp = app.config.get("LAST_DISPATCHED_OTP", {}).get(test_email)
+        assert otp is not None, "Failed to capture dispatched OTP from outbox"
+        print(f"\n[2/4] Verifying 6-digit OTP ({otp}) to obtain session token...")
+        otp_res = client.post("/api/auth/verify-otp", json={"email": test_email, "otp": otp})
+        assert otp_res.status_code == 200, f"OTP verification failed: {otp_res.get_json()}"
+        otp_data = otp_res.get_json()
+        token = otp_data["token"]
+        user_id = otp_data["user"]["id"]
+        assert token is not None, "Session token missing in OTP response"
+        print(f" -> Session token issued successfully for user ID {user_id}: {token[:12]}...")
+
+        # Step 3: Add Medicine using Session Token (NO user_id in payload)
+        print(f"\n[3/4] Adding new medicine using session token (identity derived from token)...")
         med_payload = {
-            "user_id": user_id,
             "name": "Levothyroxine Sodium",
             "dosage_amount": "50",
             "dosage_unit": "mcg",
@@ -61,15 +80,19 @@ def run_verification():
             "low_stock_threshold": 10,
             "instructions": "Take first dose early morning on empty stomach with water."
         }
-        med_res = client.post("/api/medicines", json=med_payload)
+        med_res = client.post(
+            "/api/medicines",
+            json=med_payload,
+            headers={"Authorization": f"Bearer {token}"}
+        )
         assert med_res.status_code == 201, f"Medicine addition failed: {med_res.get_json()}"
         med_data = med_res.get_json()
         medicine_id = med_data["medicine_id"]
         print(f" -> Medicine created with ID: {medicine_id}")
 
-    # Step 3: Direct Low-Level SQLite Query (Bypassing API completely)
-    print(f"\n[3/3] Inspecting SQLite database file directly at: {DEFAULT_DB_PATH}...")
-    conn = sqlite3.connect(DEFAULT_DB_PATH)
+    # Step 4: Direct Low-Level SQLite Query (Bypassing API completely)
+    print(f"\n[4/4] Inspecting SQLite database file directly at: {db_path}...")
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
 
@@ -85,7 +108,15 @@ def run_verification():
     print(f"      - ID: {user_row['id']}")
     print(f"      - Name: {user_row['name']}")
     print(f"      - Email: {user_row['email']}")
-    print(f"      - PBKDF2 Hash: {user_row['password_hash'][:24]}... (Length: {len(user_row['password_hash'])})")
+
+    # Verify Session in DB
+    cursor.execute("SELECT * FROM sessions WHERE user_id = ?", (user_id,))
+    session_row = cursor.fetchone()
+    assert session_row is not None, "ASSERTION FAILED: Session row missing in SQLite sessions table"
+    assert session_row["role"] == "patient", "ASSERTION FAILED: Session role mismatch"
+    print(" -> [PASS] Session record verified directly in SQLite sessions table.")
+    print(f"      - Token Hash: {session_row['token_hash'][:24]}...")
+    print(f"      - Expires At: {session_row['expires_at']}")
 
     # Verify Medicine in DB
     cursor.execute("SELECT * FROM medicines WHERE id = ?", (medicine_id,))
@@ -98,7 +129,7 @@ def run_verification():
     assert med_row["stock_remaining"] == 60, "ASSERTION FAILED: Stock mismatch"
     print(" -> [PASS] Medicine record verified directly in SQLite medicines table.")
     print(f"      - ID: {med_row['id']}")
-    print(f"      - User ID: {med_row['user_id']}")
+    print(f"      - User ID: {med_row['user_id']} (correctly mapped from session)")
     print(f"      - Name: {med_row['name']}")
     print(f"      - Dosage: {med_row['dosage_amount']} {med_row['dosage_unit']}")
     print(f"      - Stock: {med_row['stock_remaining']} units (Threshold: {med_row['low_stock_threshold']})")
@@ -117,7 +148,7 @@ def run_verification():
 
     print("\n" + "=" * 70)
     print("ALL DIRECT DATABASE ASSERTIONS PASSED SUCCESSFULLY!")
-    print("The database is confirmed as the single source of truth.")
+    print("Two-step verification & session authorization fully operational.")
     print("=" * 70)
 
 if __name__ == "__main__":

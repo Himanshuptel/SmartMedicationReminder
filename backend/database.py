@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS users (
     phone TEXT NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('patient', 'caregiver', 'clinician')),
     password_hash TEXT NOT NULL,
+    timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -181,13 +182,14 @@ CREATE TABLE IF NOT EXISTS clinical_notes (
     FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
--- 10. OTP Verification Codes Table (Phase 1/2)
+-- 10. OTP Verification Codes Table (Phase 1/2/3 with per-OTP salt)
 CREATE TABLE IF NOT EXISTS otp_codes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     email TEXT NOT NULL,
     phone TEXT,
     otp_hash TEXT NOT NULL,
+    salt TEXT NOT NULL DEFAULT '',
     expires_at TEXT NOT NULL,
     attempts INTEGER DEFAULT 0,
     max_attempts INTEGER DEFAULT 5,
@@ -207,6 +209,40 @@ CREATE TABLE IF NOT EXISTS sessions (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- 12. Patient Invites Table (Patient-Approved Linking)
+CREATE TABLE IF NOT EXISTS patient_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id INTEGER NOT NULL,
+    invite_code TEXT UNIQUE NOT NULL,
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'redeemed', 'expired')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 13. Concrete Scheduled Dose Instances Table (Phase 3)
+CREATE TABLE IF NOT EXISTS dose_instances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    medicine_id INTEGER NOT NULL,
+    reminder_id INTEGER,
+    medicine_name TEXT NOT NULL,
+    dosage TEXT NOT NULL,
+    meal_timing TEXT,
+    scheduled_for TEXT NOT NULL,
+    local_time TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'taken', 'snoozed', 'missed')),
+    snooze_count INTEGER NOT NULL DEFAULT 0,
+    snooze_until TEXT,
+    action_time TEXT,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, medicine_id, scheduled_for),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE,
+    FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE SET NULL
+);
+
 -- ── Indexes ────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_medicines_user ON medicines(user_id);
@@ -216,6 +252,48 @@ CREATE INDEX IF NOT EXISTS idx_history_user ON medication_history(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_otp_email ON otp_codes(email);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
+CREATE INDEX IF NOT EXISTS idx_patient_invites_code ON patient_invites(invite_code);
+CREATE INDEX IF NOT EXISTS idx_doses_user_status ON dose_instances(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_doses_scheduled ON dose_instances(scheduled_for);
+"""
+
+SCHEMA_V2 = """
+-- Migration V2: Add patient_invites and dose_instances tables
+CREATE TABLE IF NOT EXISTS patient_invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    patient_id INTEGER NOT NULL,
+    invite_code TEXT UNIQUE NOT NULL,
+    expires_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'redeemed', 'expired')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (patient_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS dose_instances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    medicine_id INTEGER NOT NULL,
+    reminder_id INTEGER,
+    medicine_name TEXT NOT NULL,
+    dosage TEXT NOT NULL,
+    meal_timing TEXT,
+    scheduled_for TEXT NOT NULL,
+    local_time TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'taken', 'snoozed', 'missed')),
+    snooze_count INTEGER NOT NULL DEFAULT 0,
+    snooze_until TEXT,
+    action_time TEXT,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, medicine_id, scheduled_for),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE,
+    FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_patient_invites_code ON patient_invites(invite_code);
+CREATE INDEX IF NOT EXISTS idx_doses_user_status ON dose_instances(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_doses_scheduled ON dose_instances(scheduled_for);
 """
 
 def apply_migrations(conn):
@@ -235,6 +313,24 @@ def apply_migrations(conn):
     if not cursor.fetchone():
         cursor.executescript(SCHEMA_V1)
         cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'initial_production_schema');")
+        cursor.execute("INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (2, 'phase_3_doses_and_invites');")
+        conn.commit()
+        return
+
+    cursor.execute("SELECT version FROM schema_migrations WHERE version = 2")
+    if not cursor.fetchone():
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata';")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE otp_codes ADD COLUMN salt TEXT NOT NULL DEFAULT '';")
+        except sqlite3.OperationalError:
+            pass
+
+        cursor.executescript(SCHEMA_V2)
+        cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (2, 'phase_3_doses_and_invites');")
         conn.commit()
 
 def seed_data(cursor):
@@ -292,10 +388,28 @@ def seed_data(cursor):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, h)
 
-    cursor.execute("""
-        INSERT INTO caregiver_patient (caregiver_id, patient_id, access_level, status) VALUES
-        (2, 1, 'Full Access & Emergency Escalation', 'Active')
-    """)
+    # Seed data links may remain ONLY in DEMO_MODE
+    is_demo = os.environ.get("DEMO_MODE", "true").lower() in ("true", "1", "yes")
+    if is_demo:
+        cursor.execute("""
+            INSERT INTO caregiver_patient (caregiver_id, patient_id, access_level, status) VALUES
+            (2, 1, 'Full Access & Emergency Escalation', 'Active')
+        """)
+
+        # Pre-seed demo dose instances for today
+        demo_doses = [
+            (1, 3, 4, 'Lisinopril', '10 mg', 'before_food', f"{today}T02:00:00Z", '07:30', 'taken', f"{today}T02:02:00Z"),
+            (1, 1, 1, 'Metformin', '500 mg', 'after_food', f"{today}T02:30:00Z", '08:00', 'taken', f"{today}T02:35:00Z"),
+            (1, 4, 5, 'Vitamin D3 & Calcium', '1000 IU', 'after_food', f"{today}T03:30:00Z", '09:00', 'pending', None),
+            (1, 1, 2, 'Metformin', '500 mg', 'after_food', f"{today}T15:00:00Z", '20:30', 'pending', None),
+            (1, 2, 3, 'Atorvastatin', '20 mg', 'after_food', f"{today}T15:30:00Z", '21:00', 'pending', None),
+        ]
+        for d in demo_doses:
+            cursor.execute("""
+                INSERT OR IGNORE INTO dose_instances 
+                (user_id, medicine_id, reminder_id, medicine_name, dosage, meal_timing, scheduled_for, local_time, status, action_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, d)
 
     cursor.execute("""
         INSERT INTO emergency_contacts (user_id, name, phone, relation, is_primary) VALUES
@@ -330,6 +444,8 @@ def init_db(db_path=None, force_reseed=False):
 
     if count == 0 or force_reseed:
         if force_reseed and count > 0:
+            cursor.execute("DELETE FROM dose_instances")
+            cursor.execute("DELETE FROM patient_invites")
             cursor.execute("DELETE FROM medication_history")
             cursor.execute("DELETE FROM reminders")
             cursor.execute("DELETE FROM medicines")

@@ -481,8 +481,8 @@ def seed_data(cursor):
 
 def init_db(db_path=None, force_reseed=False):
     """
-    Initialize SQLite database, apply schema migrations, and seed default data.
-    Ensures a fresh clone works immediately without an existing .db file in git.
+    Initialize database, apply schema migrations, and sync with Supabase Cloud Long-Term Storage.
+    Ensures a fresh clone works immediately and data persists across any redeployment.
     """
     conn = get_connection(db_path)
     apply_migrations(conn)
@@ -519,11 +519,47 @@ def init_db(db_path=None, force_reseed=False):
     path = db_path or os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH", DEFAULT_DB_PATH)
     print(f"Database initialized successfully at: {path}")
 
+    # Check and connect Supabase Cloud Long-Term Storage (skip during automated isolated tests)
+    is_testing = "PYTEST_CURRENT_TEST" in os.environ or os.environ.get("TESTING", "").lower() in ("true", "1") or (db_path and ("/tmp" in db_path or "temp" in db_path))
+    if not is_testing:
+        try:
+            from supabase_sync import is_supabase_enabled, pull_supabase_to_local, sync_local_to_supabase
+            if is_supabase_enabled():
+                print("Supabase Cloud credentials detected. Checking cloud synchronization...")
+                # If local was empty but Supabase has data, pull down from cloud
+                if count == 0 and not force_reseed:
+                    pull_res = pull_supabase_to_local(sqlite_path=path)
+                    print(f"Cloud hydration complete: {pull_res.get('summary')}")
+                else:
+                    # Sync local changes to cloud
+                    sync_res = sync_local_to_supabase(sqlite_path=path)
+                    print(f"Cloud sync complete: {sync_res.get('summary')}")
+        except Exception as e:
+            print(f"Supabase long-term sync notice: {e}")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MedRemind Database Management CLI")
     parser.add_argument("--init", action="store_true", help="Initialize schema and migrations")
     parser.add_argument("--seed", action="store_true", help="Force reseed default datasets")
     parser.add_argument("--db", type=str, default=None, help="Custom database path")
+    parser.add_argument("--sync-to-supabase", "--push-supabase", action="store_true", help="Push local database to Supabase Cloud")
+    parser.add_argument("--pull-from-supabase", action="store_true", help="Pull database from Supabase Cloud to local")
+    parser.add_argument("--supabase-status", action="store_true", help="Check Supabase Cloud storage connection and counts")
     args = parser.parse_args()
 
-    init_db(db_path=args.db, force_reseed=args.seed)
+    if args.sync_to_supabase:
+        from supabase_sync import sync_local_to_supabase
+        print("Pushing data to Supabase Cloud Long-Term Storage...")
+        print(sync_local_to_supabase(sqlite_path=args.db))
+    elif args.pull_from_supabase:
+        from supabase_sync import pull_supabase_to_local
+        print("Pulling data from Supabase Cloud Long-Term Storage...")
+        print(pull_supabase_to_local(sqlite_path=args.db))
+    elif args.supabase_status:
+        from supabase_sync import get_supabase_status
+        print("Checking Supabase Cloud status...")
+        import json
+        print(json.dumps(get_supabase_status(), indent=2))
+    else:
+        init_db(db_path=args.db, force_reseed=args.seed)
+

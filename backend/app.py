@@ -42,6 +42,16 @@ from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 
 from database import init_db, get_connection, hash_password, verify_password
+from supabase_sync import (
+    is_supabase_enabled,
+    replicate_user,
+    replicate_medicine,
+    replicate_dose_instance,
+    replicate_caregiver_link,
+    replicate_invite,
+    replicate_notification,
+    get_supabase_status
+)
 
 # ── Structured Logging Configuration ────────────────────────────────
 logging.basicConfig(
@@ -907,6 +917,16 @@ def process_dose_action(dose_id: int, user_id: int, action: str, notes: str = No
             """, (dose["user_id"], dose["reminder_id"], dose["medicine_name"], dose["dosage"], dose["local_time"], action_iso, notes or "Taken"))
             conn.commit()
 
+            # Replicate taken dose to Supabase Cloud Long-Term Storage
+            replicate_dose_instance({
+                "id": dose_id,
+                "user_id": dose["user_id"],
+                "medicine_id": dose["medicine_id"],
+                "status": "taken",
+                "action_time": action_iso,
+                "notes": notes or "Taken"
+            })
+
             return api_success(message="Dose successfully recorded as taken", status="taken")
 
         elif action == "snoozed":
@@ -935,6 +955,17 @@ def process_dose_action(dose_id: int, user_id: int, action: str, notes: str = No
             """, (dose["user_id"], dose["reminder_id"], dose["medicine_name"], dose["dosage"], dose["local_time"], action_iso, notes or "Snoozed for 10 min"))
             conn.commit()
 
+            # Replicate snoozed dose to Supabase Cloud Long-Term Storage
+            replicate_dose_instance({
+                "id": dose_id,
+                "user_id": dose["user_id"],
+                "medicine_id": dose["medicine_id"],
+                "status": "snoozed",
+                "snooze_count": dose["snooze_count"] + 1,
+                "action_time": action_iso,
+                "notes": notes or "Snoozed +10 min"
+            })
+
             return api_success(
                 data={"snooze_count": dose["snooze_count"] + 1, "snooze_until": snooze_until_iso},
                 message=f"Dose snoozed for 10 minutes (Snooze {dose['snooze_count'] + 1}/3)"
@@ -957,6 +988,16 @@ def process_dose_action(dose_id: int, user_id: int, action: str, notes: str = No
                 VALUES (?, ?, ?, ?, 'missed', ?, ?, ?)
             """, (dose["user_id"], dose["reminder_id"], dose["medicine_name"], dose["dosage"], dose["local_time"], action_iso, notes or "Skipped"))
             conn.commit()
+
+            # Replicate missed dose to Supabase Cloud Long-Term Storage
+            replicate_dose_instance({
+                "id": dose_id,
+                "user_id": dose["user_id"],
+                "medicine_id": dose["medicine_id"],
+                "status": "missed",
+                "action_time": action_iso,
+                "notes": notes or "Patient skipped dose"
+            })
 
             cursor.execute("SELECT name FROM users WHERE id = ?", (dose["user_id"],))
             u_row = cursor.fetchone()
@@ -998,14 +1039,23 @@ def health():
         "institution": "Parul University",
         "guide": "Prof. Sathwik Chebrolu",
         "demo_mode": DEMO_MODE,
+        "database_storage": "Supabase Cloud PostgreSQL" if is_supabase_enabled() else "SQLite Local",
+        "supabase_connected": is_supabase_enabled(),
         "timestamp": get_current_time().isoformat()
     })
 
+@app.route("/api/database/status", methods=["GET"])
+def database_status():
+    """Expose live Supabase Cloud Long-Term Storage connection and table statistics."""
+    return api_success(get_supabase_status())
+
 @app.route("/api/config", methods=["GET"])
 def get_config():
-    """Expose public client settings (demo mode status)."""
+    """Expose public client settings (demo mode status and cloud storage mode)."""
     return api_success({
         "demo_mode": DEMO_MODE,
+        "storage": "supabase_cloud" if is_supabase_enabled() else "sqlite_local",
+        "supabase_enabled": is_supabase_enabled(),
         "otp_length": 6,
         "cooldown_seconds": 30
     })
@@ -1064,6 +1114,17 @@ def auth_register():
 
     conn.commit()
     conn.close()
+
+    # Replicate newly registered user to Supabase Cloud Long-Term Storage
+    replicate_user({
+        "id": user_id,
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "role": role,
+        "password_hash": password_hash,
+        "timezone": user_tz
+    })
 
     dispatch_otp(email, phone, otp_code)
 
@@ -1312,6 +1373,17 @@ def auth_direct_register():
 
     conn.commit()
     conn.close()
+
+    # Replicate newly verified user to Supabase Cloud Long-Term Storage
+    replicate_user({
+        "id": user_id,
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "role": role,
+        "password_hash": password_hash,
+        "timezone": user_tz
+    })
 
     user_dict = {
         "id": user_id,
@@ -1698,6 +1770,14 @@ def create_patient_invite():
     conn.commit()
     conn.close()
 
+    # Replicate invite to Supabase Cloud Long-Term Storage
+    replicate_invite({
+        "patient_id": g.current_user["id"],
+        "invite_code": code,
+        "expires_at": expires_at,
+        "status": "active"
+    })
+
     return api_success(
         data={"invite_code": code, "expires_at": expires_at},
         message="Patient invite code generated successfully. Share this with your caregiver or clinician.",
@@ -1751,6 +1831,20 @@ def redeem_patient_invite():
 
     conn.commit()
     conn.close()
+
+    # Replicate connection to Supabase Cloud Long-Term Storage
+    replicate_caregiver_link({
+        "caregiver_id": g.current_user["id"],
+        "patient_id": patient_id,
+        "access_level": access_level,
+        "status": "Active"
+    })
+    replicate_invite({
+        "id": invite["id"],
+        "patient_id": patient_id,
+        "invite_code": invite_code,
+        "status": "redeemed"
+    })
 
     return api_success(
         data={"patient_id": patient_id, "access_level": access_level},
@@ -1846,6 +1940,23 @@ def medicines_collection():
         """, (med_id, user_id, t, f"Dose {idx+1} ({t})", start_date, end_date))
 
     conn.commit()
+
+    # Replicate newly added medicine to Supabase Cloud Long-Term Storage
+    replicate_medicine({
+        "id": med_id,
+        "user_id": user_id,
+        "name": name,
+        "dosage_amount": dosage_amount,
+        "dosage_unit": dosage_unit,
+        "frequency": frequency,
+        "meal_timing": meal_timing,
+        "start_date": start_date,
+        "end_date": end_date,
+        "instructions": instructions,
+        "stock_remaining": stock,
+        "low_stock_threshold": low_stock,
+        "barcode": barcode
+    })
 
     # Pre-generate today's concrete doses
     generate_daily_doses(user_id, conn=conn)

@@ -321,7 +321,7 @@ function LoginForm({ onSubmit, loading, serverError, onDemoLogin, demoMode }) {
 }
 
 /* ── Auth Screen ──────────────────────────────────── */
-export default function AuthScreen({ onComplete }) {
+export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearSessionExpiredMessage }) {
   const [mode, setMode] = useState('login');
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState('');
@@ -334,6 +334,7 @@ export default function AuthScreen({ onComplete }) {
   }, []);
 
   const handleSignUpSubmit = async (formData) => {
+    if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
     setLoading(true);
     setServerError('');
     try {
@@ -351,6 +352,7 @@ export default function AuthScreen({ onComplete }) {
   };
 
   const handleLoginSubmit = async (formData) => {
+    if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
     setLoading(true);
     setServerError('');
     try {
@@ -368,6 +370,7 @@ export default function AuthScreen({ onComplete }) {
   };
 
   const handleDemoLogin = async () => {
+    if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
     setLoading(true);
     setServerError('');
     try {
@@ -417,6 +420,14 @@ export default function AuthScreen({ onComplete }) {
         <div className="auth-panel-form">
           <div className="card">
             <ProgressBar currentStep={1} />
+
+            {sessionExpiredMessage && (
+              <div className="alert alert-warning" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }} role="alert">
+                <AlertCircleIcon size={18} />
+                <span>{sessionExpiredMessage}</span>
+              </div>
+            )}
+
             <h1 className="screen-title">{mode === 'login' ? 'Sign In' : 'Create Account'}</h1>
             <p className="screen-subtitle">
               {mode === 'login'

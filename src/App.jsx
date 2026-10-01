@@ -76,10 +76,41 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [screen]);
 
+  // Backend Unreachable & Session Expiration State
+  const [isBackendUnreachable, setIsBackendUnreachable] = useState(false);
+  const [sessionExpiredMessage, setSessionExpiredMessage] = useState('');
+
+  // Handle network reachability events
+  useEffect(() => {
+    const handleOffline = () => setIsBackendUnreachable(true);
+    const handleOnline = () => setIsBackendUnreachable(false);
+
+    window.addEventListener('medremind:backend-offline', handleOffline);
+    window.addEventListener('medremind:backend-online', handleOnline);
+
+    // Initial ping to verify backend status
+    api.getConfig().then(() => setIsBackendUnreachable(false)).catch(() => setIsBackendUnreachable(true));
+
+    return () => {
+      window.removeEventListener('medremind:backend-offline', handleOffline);
+      window.removeEventListener('medremind:backend-online', handleOnline);
+    };
+  }, []);
+
+  const handleRetryBackend = async () => {
+    try {
+      await api.getConfig();
+      setIsBackendUnreachable(false);
+    } catch {
+      setIsBackendUnreachable(true);
+    }
+  };
+
   // Handle session expiration redirect
   useEffect(() => {
-    const handleExpired = () => {
+    const handleExpired = (e) => {
       setAuthData(null);
+      setSessionExpiredMessage('Your session has expired or is invalid. Please sign in again.');
       setScreen(SCREENS.AUTH);
     };
     window.addEventListener('medremind:session-expired', handleExpired);
@@ -87,6 +118,7 @@ export default function App() {
   }, []);
 
   const handleAuthComplete = (payload) => {
+    setSessionExpiredMessage('');
     setAuthData(payload);
     setScreen(SCREENS.OTP);
   };
@@ -174,6 +206,26 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {/* Persistent Backend Unreachable Alert Banner */}
+      {isBackendUnreachable && (
+        <aside className="backend-offline-banner" role="alert" aria-live="assertive">
+          <div className="offline-banner-content">
+            <span className="offline-icon" aria-hidden="true">⚠️</span>
+            <div>
+              <strong>Backend Server Unreachable</strong>
+              <p>Unable to connect to Flask API server at <code>/api</code>. Please ensure the Python backend is running.</p>
+            </div>
+            <button
+              type="button"
+              className="btn-offline-retry"
+              onClick={handleRetryBackend}
+            >
+              Retry Connection
+            </button>
+          </div>
+        </aside>
+      )}
+
       <TopBar
         darkMode={darkMode}
         onToggleDark={() => setDarkMode(d => !d)}
@@ -220,6 +272,8 @@ export default function App() {
         <AuthScreen
           onComplete={handleAuthComplete}
           onSkipToDashboard={() => setScreen(SCREENS.DASHBOARD)}
+          sessionExpiredMessage={sessionExpiredMessage}
+          onClearSessionExpiredMessage={() => setSessionExpiredMessage('')}
         />
       )}
 

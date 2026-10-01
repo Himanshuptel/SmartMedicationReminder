@@ -245,6 +245,13 @@ CREATE TABLE IF NOT EXISTS dose_instances (
     FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE SET NULL
 );
 
+-- 14. Request Rate Limits Table (Phase 5 SQLite-backed sliding window)
+CREATE TABLE IF NOT EXISTS request_rate_limits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    limiter_key TEXT NOT NULL,
+    timestamp INTEGER NOT NULL
+);
+
 -- ── Indexes ────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_medicines_user ON medicines(user_id);
@@ -257,6 +264,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_patient_invites_code ON patient_invites(invite_code);
 CREATE INDEX IF NOT EXISTS idx_doses_user_status ON dose_instances(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_doses_scheduled ON dose_instances(scheduled_for);
+CREATE INDEX IF NOT EXISTS idx_rate_limits_key_time ON request_rate_limits(limiter_key, timestamp);
 """
 
 SCHEMA_V2 = """
@@ -316,6 +324,7 @@ def apply_migrations(conn):
         cursor.executescript(SCHEMA_V1)
         cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (1, 'initial_production_schema');")
         cursor.execute("INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (2, 'phase_3_doses_and_invites');")
+        cursor.execute("INSERT OR IGNORE INTO schema_migrations (version, name) VALUES (3, 'phase_5_sqlite_rate_limiting');")
         conn.commit()
         return
 
@@ -343,6 +352,19 @@ def apply_migrations(conn):
 
         cursor.executescript(SCHEMA_V2)
         cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (2, 'phase_3_doses_and_invites');")
+        conn.commit()
+
+    cursor.execute("SELECT version FROM schema_migrations WHERE version = 3")
+    if not cursor.fetchone():
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS request_rate_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                limiter_key TEXT NOT NULL,
+                timestamp INTEGER NOT NULL
+            );
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_key_time ON request_rate_limits(limiter_key, timestamp);")
+        cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (3, 'phase_5_sqlite_rate_limiting');")
         conn.commit()
 
 def seed_data(cursor):
@@ -454,8 +476,11 @@ def init_db(db_path=None, force_reseed=False):
     cursor.execute("SELECT COUNT(*) FROM users")
     count = cursor.fetchone()[0]
 
-    if count == 0 or force_reseed:
+    demo_mode = os.environ.get("DEMO_MODE", "true").lower() in ("true", "1", "yes")
+
+    if (count == 0 or force_reseed) and demo_mode:
         if force_reseed and count > 0:
+            cursor.execute("DELETE FROM request_rate_limits")
             cursor.execute("DELETE FROM dose_instances")
             cursor.execute("DELETE FROM patient_invites")
             cursor.execute("DELETE FROM medication_history")
@@ -472,6 +497,8 @@ def init_db(db_path=None, force_reseed=False):
         seed_data(cursor)
         conn.commit()
         print(f"Database seeded successfully with default datasets.")
+    elif not demo_mode and count == 0:
+        print("Production mode (DEMO_MODE=false): Clean database initialized with 0 seeded users.")
 
     conn.close()
     path = db_path or os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH", DEFAULT_DB_PATH)

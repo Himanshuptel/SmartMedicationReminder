@@ -29,6 +29,7 @@ import hmac
 import secrets
 from datetime import datetime, timedelta, timezone, time as dt_time
 from functools import wraps
+import threading
 from zoneinfo import ZoneInfo
 
 from flask import Flask, request, jsonify, g
@@ -344,15 +345,31 @@ def generate_daily_doses(user_id: int, date_str: str = None, clock=None, conn=No
         """, (user_id, date_str, date_str))
         meds = cursor.fetchall()
 
+        cursor.execute("PRAGMA table_info(reminders)")
+        rem_cols = [c[1] for c in cursor.fetchall()]
+        has_rem_dates = "start_date" in rem_cols and "end_date" in rem_cols
+
         for med in meds:
             dosage = f"{med['dosage_amount']} {med['dosage_unit']}"
-            cursor.execute("""
-                SELECT id, scheduled_time, label FROM reminders
-                WHERE medicine_id = ? AND user_id = ? AND status = 'active'
-            """, (med["id"], user_id))
+            if has_rem_dates:
+                cursor.execute("""
+                    SELECT id, scheduled_time, label, status, start_date, end_date FROM reminders
+                    WHERE medicine_id = ? AND user_id = ? AND status = 'active'
+                """, (med["id"], user_id))
+            else:
+                cursor.execute("""
+                    SELECT id, scheduled_time, label, status FROM reminders
+                    WHERE medicine_id = ? AND user_id = ? AND status = 'active'
+                """, (med["id"], user_id))
             rems = cursor.fetchall()
 
             for rem in rems:
+                if has_rem_dates:
+                    if rem["start_date"] and rem["start_date"] > date_str:
+                        continue
+                    if rem["end_date"] and rem["end_date"] < date_str:
+                        continue
+
                 local_time = rem["scheduled_time"]
                 try:
                     parts = local_time.split(":")
@@ -518,6 +535,48 @@ def evaluate_overdue_doses(user_id=None, clock=None, conn=None):
     finally:
         if close_conn:
             conn.close()
+
+# ── Guarded Background Worker for Overdue Missed-Dose Detection ─────
+
+_bg_lock = threading.Lock()
+_bg_stop_event = threading.Event()
+_bg_thread = None
+
+def run_background_overdue_check(clock=None):
+    """
+    Executes background overdue dose evaluation across all users.
+    Guarded by _bg_lock to prevent concurrent double-firing across threads.
+    """
+    if not _bg_lock.acquire(blocking=False):
+        return False
+    try:
+        conn = get_connection()
+        try:
+            evaluate_overdue_doses(user_id=None, clock=clock, conn=conn)
+        finally:
+            conn.close()
+        return True
+    finally:
+        _bg_lock.release()
+
+def _background_scheduler_loop(interval=60):
+    while not _bg_stop_event.wait(interval):
+        try:
+            run_background_overdue_check()
+        except Exception as e:
+            print(f"[Background Worker] Error evaluating overdue doses: {e}")
+
+def start_background_scheduler():
+    global _bg_thread
+    if os.environ.get("ENABLE_BACKGROUND_WORKER", "true").lower() in ("true", "1", "yes"):
+        if _bg_thread is None or not _bg_thread.is_alive():
+            _bg_thread = threading.Thread(target=_background_scheduler_loop, args=(60,), daemon=True)
+            _bg_thread.start()
+
+def stop_background_scheduler():
+    _bg_stop_event.set()
+
+start_background_scheduler()
 
 def process_dose_action(dose_id: int, user_id: int, action: str, notes: str = None, clock=None, conn=None):
     """
@@ -1079,6 +1138,7 @@ def medicines_collection():
     frequency = (data.get("frequency") or "once").strip()
     meal_timing = (data.get("meal_timing") or data.get("mealTiming") or "after_food").strip()
     start_date = data.get("start_date") or data.get("startDate") or get_current_time().strftime("%Y-%m-%d")
+    end_date = data.get("end_date") or data.get("endDate")
     instructions = data.get("instructions", "").strip()
     stock = int(data.get("stock_remaining") or data.get("stockRemaining") or 30)
     low_stock = int(data.get("low_stock_threshold") or data.get("lowStockThreshold") or 5)
@@ -1106,9 +1166,9 @@ def medicines_collection():
                 """, (user_id, f"Interaction Alert ({item['severity']}): {name} + {other_drug.capitalize()} - {item['description']}"))
 
     cursor.execute("""
-        INSERT INTO medicines (user_id, name, dosage_amount, dosage_unit, frequency, meal_timing, start_date, instructions, stock_remaining, low_stock_threshold, barcode)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (user_id, name, dosage_amount, dosage_unit, frequency, meal_timing, start_date, instructions, stock, low_stock, barcode))
+        INSERT INTO medicines (user_id, name, dosage_amount, dosage_unit, frequency, meal_timing, start_date, end_date, instructions, stock_remaining, low_stock_threshold, barcode)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, name, dosage_amount, dosage_unit, frequency, meal_timing, start_date, end_date, instructions, stock, low_stock, barcode))
     med_id = cursor.lastrowid
 
     # Create associated default reminders based on frequency
@@ -1120,9 +1180,9 @@ def medicines_collection():
 
     for idx, t in enumerate(times):
         cursor.execute("""
-            INSERT INTO reminders (medicine_id, user_id, scheduled_time, label, status)
-            VALUES (?, ?, ?, ?, 'active')
-        """, (med_id, user_id, t, f"Dose {idx+1} ({t})"))
+            INSERT INTO reminders (medicine_id, user_id, scheduled_time, label, status, start_date, end_date)
+            VALUES (?, ?, ?, ?, 'active', ?, ?)
+        """, (med_id, user_id, t, f"Dose {idx+1} ({t})", start_date, end_date))
 
     conn.commit()
 
@@ -1163,10 +1223,12 @@ def delete_medicine(med_id):
 # ── Concrete Dose Instances & State Machine Endpoints ──────────────
 
 @app.route("/api/doses/today", methods=["GET"])
+@app.route("/api/doses", methods=["GET"])
 @require_auth
 def get_today_doses():
     target_user_id = g.current_user["id"]
     requested_patient = request.args.get("patient_id", type=int)
+    target_date = request.args.get("date")
 
     if requested_patient and requested_patient != g.current_user["id"]:
         if not verify_caregiver_access(g.current_user["id"], requested_patient):
@@ -1175,8 +1237,8 @@ def get_today_doses():
 
     # Lazy auto-miss evaluation + generation
     evaluate_overdue_doses(target_user_id)
-    doses = generate_daily_doses(target_user_id)
-    return api_success({"doses": doses})
+    doses = generate_daily_doses(target_user_id, date_str=target_date)
+    return api_success({"doses": doses, "date": target_date or "today"})
 
 @app.route("/api/doses/<int:dose_id>/action", methods=["POST"])
 @require_auth
@@ -1212,6 +1274,7 @@ def dose_miss(dose_id):
 def get_reminders_and_schedule():
     target_user_id = g.current_user["id"]
     requested_patient = request.args.get("patient_id", type=int)
+    target_date = request.args.get("date")
 
     if requested_patient and requested_patient != g.current_user["id"]:
         if not verify_caregiver_access(g.current_user["id"], requested_patient):
@@ -1220,7 +1283,7 @@ def get_reminders_and_schedule():
 
     # Lazy evaluation of overdue doses
     evaluate_overdue_doses(target_user_id)
-    doses = generate_daily_doses(target_user_id)
+    doses = generate_daily_doses(target_user_id, date_str=target_date)
 
     conn = get_connection()
     cursor = conn.cursor()
@@ -1382,6 +1445,16 @@ def caregiver_patients():
     caregiver_id = g.current_user["id"]
     conn = get_connection()
     cursor = conn.cursor()
+
+    # Lazy overdue evaluation on caregiver read too
+    cursor.execute("""
+        SELECT patient_id FROM caregiver_patient
+        WHERE caregiver_id = ? AND status = 'Active'
+    """, (caregiver_id,))
+    linked_ids = [r[0] for r in cursor.fetchall()]
+    for pid in linked_ids:
+        evaluate_overdue_doses(pid, conn=conn)
+
     cursor.execute("""
         SELECT u.id, u.name, u.email, u.phone, cp.access_level, cp.status,
                (SELECT COUNT(*) FROM medicines WHERE user_id = u.id) as active_medicines,
@@ -1393,17 +1466,29 @@ def caregiver_patients():
     """, (caregiver_id,))
     patients = [dict(row) for row in cursor.fetchall()]
 
+    for p in patients:
+        cursor.execute("""
+            SELECT id, name, dosage_amount, dosage_unit, frequency, meal_timing, instructions, stock_remaining
+            FROM medicines WHERE user_id = ? ORDER BY id DESC
+        """, (p["id"],))
+        p["medicines"] = [dict(row) for row in cursor.fetchall()]
+
     patient_ids = [p["id"] for p in patients]
     if patient_ids:
         placeholders = ",".join("?" for _ in patient_ids)
         cursor.execute(f"""
             SELECT * FROM notifications 
-            WHERE user_id IN ({placeholders}) AND type IN ('missed_dose', 'emergency', 'refill') 
+            WHERE (user_id IN ({placeholders}) OR user_id = ?) AND type IN ('missed_dose', 'emergency', 'refill') 
             ORDER BY id DESC LIMIT 20
-        """, patient_ids)
+        """, (*patient_ids, caregiver_id))
         alerts = [dict(row) for row in cursor.fetchall()]
     else:
-        alerts = []
+        cursor.execute("""
+            SELECT * FROM notifications 
+            WHERE user_id = ? AND type IN ('missed_dose', 'emergency', 'refill') 
+            ORDER BY id DESC LIMIT 20
+        """, (caregiver_id,))
+        alerts = [dict(row) for row in cursor.fetchall()]
 
     conn.close()
     return api_success({"patients": patients, "alerts": alerts})
@@ -1443,6 +1528,16 @@ def clinician_patients():
     clinician_id = g.current_user["id"]
     conn = get_connection()
     cursor = conn.cursor()
+
+    # Lazy overdue evaluation on clinician read too
+    cursor.execute("""
+        SELECT patient_id FROM caregiver_patient
+        WHERE caregiver_id = ? AND status = 'Active'
+    """, (clinician_id,))
+    linked_ids = [r[0] for r in cursor.fetchall()]
+    for pid in linked_ids:
+        evaluate_overdue_doses(pid, conn=conn)
+
     cursor.execute("""
         SELECT u.id, u.name, u.email, u.phone,
                (SELECT COUNT(*) FROM medicines WHERE user_id = u.id) as active_medicines,
@@ -1453,6 +1548,13 @@ def clinician_patients():
         WHERE cp.caregiver_id = ? AND cp.status = 'Active' AND u.role = 'patient'
     """, (clinician_id,))
     patients = [dict(row) for row in cursor.fetchall()]
+
+    for p in patients:
+        cursor.execute("""
+            SELECT id, name, dosage_amount, dosage_unit, frequency, meal_timing, instructions, stock_remaining
+            FROM medicines WHERE user_id = ? ORDER BY id DESC
+        """, (p["id"],))
+        p["medicines"] = [dict(row) for row in cursor.fetchall()]
 
     if patients:
         p_ids = [p["id"] for p in patients]

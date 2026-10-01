@@ -42,6 +42,11 @@ MEMBERS = {
 
 # Ownership mapping: specific paths first, then folder prefixes
 PATH_OWNERS = [
+    # Anuj Sharma (API Client, Testing & QA, Technical Documentation)
+    ("src/services/", "Anuj", "API Client & Network"),
+    ("tests/", "Anuj", "Automated Pytest Suite"),
+    ("docs/", "Anuj", "Documentation & Audit Reports"),
+
     # Divyadarshan (Frontend UI/UX)
     ("src/screens/", "Divyadarshan", "UI Screens"),
     ("src/components/", "Divyadarshan", "UI Components"),
@@ -49,11 +54,6 @@ PATH_OWNERS = [
     ("src/index.css", "Divyadarshan", "Styles & Theme"),
     ("index.html", "Divyadarshan", "HTML Entry"),
     ("src/", "Divyadarshan", "Frontend Core"),
-
-    # Anuj Sharma (API Client, Testing & QA, Technical Documentation)
-    ("src/services/", "Anuj", "API Client & Network"),
-    ("tests/", "Anuj", "Automated Pytest Suite"),
-    ("docs/", "Anuj", "Documentation & Audit Reports"),
 
     # Himanshu (Backend Flask, SQLite, Migrations, DevOps & Scripts)
     ("backend/", "Himanshu", "Flask Backend & Database"),

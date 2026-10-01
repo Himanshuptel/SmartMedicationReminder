@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS reminders (
     label TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'completed')),
     sound_enabled INTEGER DEFAULT 1,
+    start_date TEXT,
+    end_date TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -326,6 +328,16 @@ def apply_migrations(conn):
 
         try:
             cursor.execute("ALTER TABLE otp_codes ADD COLUMN salt TEXT NOT NULL DEFAULT '';")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE reminders ADD COLUMN start_date TEXT;")
+        except sqlite3.OperationalError:
+            pass
+
+        try:
+            cursor.execute("ALTER TABLE reminders ADD COLUMN end_date TEXT;")
         except sqlite3.OperationalError:
             pass
 

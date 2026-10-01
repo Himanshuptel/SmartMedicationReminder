@@ -30,6 +30,8 @@ import secrets
 from datetime import datetime, timedelta, timezone, time as dt_time
 from functools import wraps
 import threading
+import logging
+import time
 from zoneinfo import ZoneInfo
 
 from flask import Flask, request, jsonify, g
@@ -37,20 +39,82 @@ from flask_cors import CORS
 
 from database import init_db, get_connection, hash_password, verify_password
 
-app = Flask(__name__)
-CORS(app, origins="*")
+# ── Structured Logging Configuration ────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s"
+)
+logger = logging.getLogger("medremind.api")
 
 # ── Environment & Security Configuration ───────────────────────────
+
+def validate_production_configuration(env=None):
+    """
+    Validates mandatory security and service settings for production mode (DEMO_MODE=false).
+    Enforces non-empty, non-default SECRET_KEY (>= 32 chars), ALLOWED_ORIGINS (no wildcard '*'),
+    and full SMTP credential configuration.
+    """
+    if env is None:
+        env = os.environ
+    demo_mode = env.get("DEMO_MODE", "true").lower() in ("true", "1", "yes")
+    if demo_mode:
+        return True
+
+    secret_key = env.get("SECRET_KEY", "")
+    if not secret_key or secret_key == "dev-insecure-secret-key-change-in-production-min32chars" or len(secret_key) < 32:
+        raise RuntimeError("FATAL: In production mode (DEMO_MODE=false), SECRET_KEY is strictly required and must be at least 32 characters.")
+
+    allowed_origins = env.get("ALLOWED_ORIGINS", "").strip()
+    if not allowed_origins or allowed_origins == "*":
+        raise RuntimeError("FATAL: In production mode (DEMO_MODE=false), ALLOWED_ORIGINS must be set and cannot be wildcard '*'.")
+
+    required_smtp = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM"]
+    missing_smtp = [k for k in required_smtp if not env.get(k)]
+    if missing_smtp:
+        raise RuntimeError(f"FATAL: In production mode (DEMO_MODE=false), SMTP settings are required. Missing: {', '.join(missing_smtp)}")
+
+    return True
 
 DEMO_MODE = os.environ.get("DEMO_MODE", "true").lower() in ("true", "1", "yes")
 SECRET_KEY = os.environ.get("SECRET_KEY")
 
-# In production mode (DEMO_MODE=false), refuse to start without SECRET_KEY
-if not DEMO_MODE and not SECRET_KEY:
-    raise RuntimeError("FATAL: In production mode (DEMO_MODE=false), SECRET_KEY environment variable is strictly required.")
+if not DEMO_MODE:
+    validate_production_configuration()
 
 if not SECRET_KEY:
     SECRET_KEY = "dev-insecure-secret-key-change-in-production-min32chars"
+
+def get_allowed_origins(env=None):
+    """
+    Resolves permitted CORS origins.
+    In DEMO_MODE, defaults to local Vite dev server and common local origins if unset.
+    In production mode, parses comma-separated ALLOWED_ORIGINS.
+    """
+    if env is None:
+        env = os.environ
+    raw = env.get("ALLOWED_ORIGINS", "").strip()
+    demo_mode = env.get("DEMO_MODE", "true").lower() in ("true", "1", "yes")
+
+    if raw:
+        if raw == "*":
+            if not demo_mode:
+                raise RuntimeError("Wildcard CORS origin '*' is strictly prohibited when DEMO_MODE=false.")
+            return "*"
+        return [o.strip() for o in raw.split(",") if o.strip()]
+
+    if not demo_mode:
+        raise RuntimeError("FATAL: In production mode (DEMO_MODE=false), ALLOWED_ORIGINS is strictly required.")
+
+    return [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000"
+    ]
+
+app = Flask(__name__)
+# Initialize CORS with restricted origins
+CORS(app, origins=get_allowed_origins(), supports_credentials=True)
 
 ESCALATION_CONSECUTIVE_MISSES = int(os.environ.get("ESCALATION_CONSECUTIVE_MISSES", 3))
 GRACE_WINDOW_MINUTES = int(os.environ.get("GRACE_WINDOW_MINUTES", 30))
@@ -91,14 +155,168 @@ def api_success(data=None, message=None, status_code=200, **extra):
     return jsonify(payload), status_code
 
 def api_error(message, status_code=400, code="BAD_REQUEST", details=None):
-    return jsonify({
+    payload = {
         "success": False,
         "error": {
             "code": code,
             "message": message,
             "details": details
         }
-    }), status_code
+    }
+    resp = jsonify(payload)
+    if status_code == 429 and details and "retry_after" in details:
+        resp.headers["Retry-After"] = str(details["retry_after"])
+    return resp, status_code
+
+# ── SQLite-Backed Rate Limiting (Cross-Worker Sliding Window) ──────
+
+def check_rate_limit(limiter_key: str, max_requests: int, window_seconds: int, clock=None) -> tuple[bool, int]:
+    """
+    SQLite-backed sliding-window rate limiter shared across all worker processes.
+    Returns (is_allowed: bool, retry_after_seconds: int).
+    """
+    now_utc = get_current_time(clock)
+    current_ts = int(now_utc.timestamp())
+    window_start = current_ts - window_seconds
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        # Clean up entries outside the active sliding window
+        cursor.execute(
+            "DELETE FROM request_rate_limits WHERE limiter_key = ? AND (timestamp < ? OR timestamp > ?)",
+            (limiter_key, window_start, current_ts + window_seconds)
+        )
+        cursor.execute(
+            "SELECT COUNT(*), MIN(timestamp) FROM request_rate_limits WHERE limiter_key = ? AND timestamp >= ? AND timestamp <= ?",
+            (limiter_key, window_start, current_ts)
+        )
+        row = cursor.fetchone()
+        count = row[0] if row else 0
+        oldest_ts = row[1] if row and row[1] is not None else current_ts
+        if oldest_ts > current_ts:
+            oldest_ts = current_ts
+
+        if count >= max_requests:
+            elapsed = max(0, current_ts - oldest_ts)
+            retry_after = max(1, min(window_seconds, window_seconds - elapsed))
+            return False, retry_after
+
+        cursor.execute("INSERT INTO request_rate_limits (limiter_key, timestamp) VALUES (?, ?)", (limiter_key, current_ts))
+        conn.commit()
+        return True, 0
+    finally:
+        conn.close()
+
+def enforce_rate_limits(endpoint_name: str, email: str = None, clock=None):
+    """
+    Enforces rate limits on authentication endpoints per IP and per email.
+    Returns Flask error response tuple if limit exceeded, else None.
+    """
+    if app.config.get("RATE_LIMIT_ENABLED", True) is False:
+        return None
+
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+    window_sec = app.config.get("RATE_LIMIT_WINDOW_SECONDS", 60)
+
+    default_max = 5
+    if endpoint_name == "resend-otp":
+        default_max = 3
+
+    config_key = f"RATE_LIMIT_{endpoint_name.upper().replace('-', '_')}_MAX"
+    max_req = app.config.get(config_key, int(os.environ.get(config_key, default_max)))
+
+    # 1. IP check
+    ip_key = f"ip:{endpoint_name}:{client_ip}"
+    allowed, retry_after = check_rate_limit(ip_key, max_req, window_sec, clock=clock)
+    if not allowed:
+        return api_error(
+            f"Too many requests from this IP address. Please retry after {retry_after} seconds.",
+            status_code=429,
+            code="TOO_MANY_REQUESTS",
+            details={"retry_after": retry_after, "limit_type": "ip"}
+        )
+
+    # 2. Email check (if email passed)
+    if email:
+        email_clean = email.strip().lower()
+        if email_clean:
+            email_key = f"email:{endpoint_name}:{email_clean}"
+            allowed, retry_after = check_rate_limit(email_key, max_req, window_sec, clock=clock)
+            if not allowed:
+                return api_error(
+                    f"Too many requests for this account. Please retry after {retry_after} seconds.",
+                    status_code=429,
+                    code="TOO_MANY_REQUESTS",
+                    details={"retry_after": retry_after, "limit_type": "email"}
+                )
+
+    return None
+
+# ── Request Hooks: Security Headers & Structured Logging ────────────
+
+@app.before_request
+def record_request_start():
+    g.request_start_time = time.time()
+
+@app.after_request
+def apply_security_and_logging(response):
+    # Security Headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com data:; "
+        "img-src 'self' data: https: blob:; "
+        "connect-src 'self' http: https: ws: wss:; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self';"
+    )
+    if request.is_secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    # Structured request logging without sensitive data (no OTPs, passwords, or tokens)
+    start = getattr(g, "request_start_time", None)
+    duration_ms = round((time.time() - start) * 1000, 2) if start else 0.0
+    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr or "127.0.0.1").split(",")[0].strip()
+    user_id = getattr(g, "current_user", {}).get("id") if hasattr(g, "current_user") and g.current_user else "anonymous"
+
+    logger.info(
+        f"REQ: method={request.method} path={request.path} status={response.status_code} "
+        f"duration_ms={duration_ms} ip={client_ip} user={user_id}"
+    )
+
+    return response
+
+# ── Sanitized Error Handling (No Stack Traces / SQL Leak to Client) ─
+
+@app.errorhandler(500)
+@app.errorhandler(Exception)
+def handle_unexpected_error(err):
+    from werkzeug.exceptions import HTTPException
+    if isinstance(err, HTTPException):
+        return jsonify({
+            "success": False,
+            "error": {
+                "code": err.name.upper().replace(" ", "_"),
+                "message": err.description,
+                "details": None
+            }
+        }), err.code
+
+    logger.exception(f"Unhandled exception during request {request.method} {request.path}: {err}")
+    return jsonify({
+        "success": False,
+        "error": {
+            "code": "INTERNAL_SERVER_ERROR",
+            "message": "An internal server error occurred. Please try again later.",
+            "details": None
+        }
+    }), 500
 
 # ── OTP Helpers (HMAC-SHA256 with per-OTP Salt) ────────────────────
 
@@ -118,7 +336,6 @@ def verify_otp_hash(candidate_otp: str, stored_salt: str, stored_hash: str, secr
     Constant-time verification of candidate OTP using HMAC-SHA256 and stored salt.
     """
     if not stored_salt:
-        # Fallback for legacy sha256 hashes without salt
         legacy = hashlib.sha256(f"{(secret_key or SECRET_KEY)}:{candidate_otp}".encode()).hexdigest()
         return hmac.compare_digest(stored_hash, legacy)
 
@@ -130,10 +347,13 @@ def verify_otp_hash(candidate_otp: str, stored_salt: str, stored_hash: str, secr
 def dispatch_otp(email: str, phone: str, otp_code: str):
     """
     Deliver OTP via SMTP if configured.
-    In DEV mode only (DEMO_MODE=true), log OTP to server console.
-    In production mode (DEMO_MODE=false), OTP is NEVER logged or returned.
+    In DEV mode only (DEMO_MODE=true), log OTP to server console and test config.
+    In production mode (DEMO_MODE=false), OTP is NEVER logged or stored for retrieval.
     """
-    app.config.setdefault("LAST_DISPATCHED_OTP", {})[email] = otp_code
+    demo_mode = os.environ.get("DEMO_MODE", "true").lower() in ("true", "1", "yes")
+    if demo_mode:
+        app.config.setdefault("LAST_DISPATCHED_OTP", {})[email] = otp_code
+
     smtp_host = os.environ.get("SMTP_HOST")
     if smtp_host:
         try:
@@ -148,17 +368,18 @@ def dispatch_otp(email: str, phone: str, otp_code: str):
             msg["To"] = email
 
             with smtplib.SMTP(smtp_host, port) as server:
-                server.starttls()
+                if server.has_extn("starttls"):
+                    server.starttls()
                 if user and password:
                     server.login(user, password)
                 server.sendmail(sender, [email], msg.as_string())
             return
         except Exception as e:
-            if DEMO_MODE:
+            if demo_mode:
                 print(f"[SMTP WARNING] Failed to send email via SMTP: {e}", flush=True)
 
     # In DEV mode only, log to console
-    if DEMO_MODE:
+    if demo_mode:
         print(f"\n[DEV MODE OTP] >>> Verification Code for {email}: {otp_code} <<<\n", flush=True)
 
 # ── User Timezone Helper ───────────────────────────────────────────
@@ -757,6 +978,10 @@ def auth_register():
     password = body.get("password", "")
     user_tz = (body.get("timezone") or "Asia/Kolkata").strip()
 
+    rl_err = enforce_rate_limits("register", email=email)
+    if rl_err:
+        return rl_err
+
     if not name:
         return api_error("Full name is required", status_code=422, code="VALIDATION_ERROR")
     if not email or "@" not in email:
@@ -810,6 +1035,10 @@ def auth_login():
     identifier = (body.get("identifier") or body.get("email") or "").strip().lower()
     password = body.get("password", "")
 
+    rl_err = enforce_rate_limits("login", email=identifier)
+    if rl_err:
+        return rl_err
+
     if not identifier:
         return api_error("Email or phone is required", status_code=422, code="VALIDATION_ERROR")
 
@@ -861,6 +1090,10 @@ def auth_verify_otp():
     body = request.get_json(silent=True) or {}
     email = (body.get("email") or "").strip().lower()
     otp_code = (body.get("otp") or "").strip()
+
+    rl_err = enforce_rate_limits("verify-otp", email=email)
+    if rl_err:
+        return rl_err
 
     if not email:
         return api_error("Email is required", status_code=422, code="VALIDATION_ERROR")
@@ -935,6 +1168,10 @@ def auth_verify_otp():
 def auth_resend_otp():
     body = request.get_json(silent=True) or {}
     email = (body.get("email") or "").strip().lower()
+
+    rl_err = enforce_rate_limits("resend-otp", email=email)
+    if rl_err:
+        return rl_err
 
     if not email:
         return api_error("Email is required", status_code=422, code="VALIDATION_ERROR")

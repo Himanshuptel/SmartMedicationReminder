@@ -351,5 +351,47 @@ export const api = {
       notifications: res.notifications || [],
       unread_count: res.unread_count || 0
     };
+  },
+
+  // --- Concrete Dose Instances (Phase 3) ---
+  async getDosesToday(patientId = null) {
+    const query = patientId ? `?patient_id=${patientId}` : '';
+    const res = await request(`/doses/today${query}`);
+    return res.doses || [];
+  },
+
+  async takeDose(doseId, notes = '') {
+    return request(`/doses/${doseId}/take`, {
+      method: 'POST',
+      body: JSON.stringify({ notes })
+    });
+  },
+
+  async snoozeDose(doseId, notes = '') {
+    return request(`/doses/${doseId}/snooze`, {
+      method: 'POST',
+      body: JSON.stringify({ notes })
+    });
+  },
+
+  async missDose(doseId, notes = '') {
+    return request(`/doses/${doseId}/miss`, {
+      method: 'POST',
+      body: JSON.stringify({ notes })
+    });
+  },
+
+  // --- Patient-Approved Caregiver Linking ---
+  async createPatientInvite() {
+    return request('/patient/invite', {
+      method: 'POST'
+    });
+  },
+
+  async redeemPatientInvite(inviteCode) {
+    return request('/patient/link', {
+      method: 'POST',
+      body: JSON.stringify({ invite_code: inviteCode })
+    });
   }
 };

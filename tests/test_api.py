@@ -46,7 +46,12 @@ from app import (
     generate_daily_doses,
     evaluate_overdue_doses,
     process_dose_action,
-    run_background_overdue_check
+    run_background_overdue_check,
+    validate_production_configuration,
+    get_allowed_origins,
+    check_rate_limit,
+    enforce_rate_limits,
+    dispatch_otp
 )
 from database import init_db, get_connection
 
@@ -55,6 +60,7 @@ def test_client():
     """Session fixture initializing clean temporary database and Flask test client."""
     init_db(db_path=temp_db_path, force_reseed=True)
     app.config["TESTING"] = True
+    app.config["RATE_LIMIT_ENABLED"] = False
 
     with app.test_client() as client:
         yield client
@@ -983,4 +989,347 @@ def test_future_days_doses_and_start_end_dates_respected(test_client):
     # 4. Query September 25 (Before BOTH Med A and Med B started)
     res_sep25 = test_client.get("/api/doses/today?date=2026-09-25", headers=pt_header).get_json()
     assert len(res_sep25["doses"]) == 0
+
+# ── Phase 5 Tests: Production Hardening, Security, Rate Limiting & Multi-Worker ──
+
+def test_phase5_security_headers_present(test_client):
+    """
+    Phase 5 Requirement 2:
+    Verifies that security headers (CSP suited to Vite, X-Content-Type-Options,
+    X-Frame-Options, Referrer-Policy) are present on HTTP responses.
+    """
+    res = test_client.get("/api/health")
+    assert res.status_code == 200
+    assert res.headers.get("X-Content-Type-Options") == "nosniff"
+    assert res.headers.get("X-Frame-Options") == "DENY"
+    assert res.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin"
+
+    csp = res.headers.get("Content-Security-Policy", "")
+    assert "default-src 'self'" in csp
+    assert "script-src 'self' 'unsafe-inline'" in csp
+    assert "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com" in csp
+
+def test_phase5_hsts_only_when_https(test_client):
+    """
+    Phase 5 Requirement 2:
+    Strict-Transport-Security (HSTS) must ONLY be attached when requests are behind HTTPS.
+    Plain HTTP requests must NOT carry HSTS.
+    """
+    # 1. Plain HTTP request: no HSTS
+    http_res = test_client.get("/api/health")
+    assert "Strict-Transport-Security" not in http_res.headers
+
+    # 2. Behind HTTPS proxy (X-Forwarded-Proto: https): HSTS present
+    https_res = test_client.get("/api/health", headers={"X-Forwarded-Proto": "https"})
+    assert "Strict-Transport-Security" in https_res.headers
+    assert "max-age=31536000" in https_res.headers["Strict-Transport-Security"]
+
+def test_phase5_cors_restricted_in_production():
+    """
+    Phase 5 Requirement 2 & 5:
+    CORS must be restricted to ALLOWED_ORIGINS; wildcard '*' is strictly disallowed in production.
+    """
+    # 1. Production mode with wildcard '*' must fail startup/validation
+    with pytest.raises(RuntimeError) as exc_info:
+        validate_production_configuration({
+            "DEMO_MODE": "false",
+            "SECRET_KEY": "a" * 32,
+            "ALLOWED_ORIGINS": "*",
+            "SMTP_HOST": "smtp.gmail.com",
+            "SMTP_PORT": "587",
+            "SMTP_USER": "test@domain.com",
+            "SMTP_PASS": "pass",
+            "SMTP_FROM": "noreply@domain.com"
+        })
+    assert "ALLOWED_ORIGINS" in str(exc_info.value)
+    assert "wildcard" in str(exc_info.value).lower()
+
+    # 2. Production mode with specific origins succeeds
+    origins = get_allowed_origins({
+        "DEMO_MODE": "false",
+        "ALLOWED_ORIGINS": "https://example.com, https://app.example.com"
+    })
+    assert origins == ["https://example.com", "https://app.example.com"]
+
+    # 3. get_allowed_origins rejects '*' when DEMO_MODE=false
+    with pytest.raises(RuntimeError):
+        get_allowed_origins({
+            "DEMO_MODE": "false",
+            "ALLOWED_ORIGINS": "*"
+        })
+
+def test_phase5_sqlite_rate_limiting_ip_with_fake_clock(test_client):
+    """
+    Phase 5 Requirement 3:
+    SQLite-backed rate limiting per IP on login endpoint with fake clock advancement.
+    """
+    app.config["RATE_LIMIT_ENABLED"] = True
+    app.config["RATE_LIMIT_LOGIN_MAX"] = 3
+    app.config["RATE_LIMIT_WINDOW_SECONDS"] = 60
+
+    fake_clock = datetime(2026, 10, 1, 10, 0, 0, tzinfo=timezone.utc)
+    app.config["CLOCK_FN"] = lambda: fake_clock
+
+    ip_headers = {"X-Forwarded-For": "198.51.100.42"}
+
+    try:
+        # Requests 1, 2, 3 should pass through rate limiter (404 account not found)
+        for i in range(3):
+            res = test_client.post("/api/auth/login", json={"identifier": f"unknown_{i}@parul.ac.in", "password": "x"}, headers=ip_headers)
+            assert res.status_code == 404
+
+        # Request 4 from same IP within the 60-second window must be rate-limited (HTTP 429)
+        blocked_res = test_client.post("/api/auth/login", json={"identifier": "unknown_4@parul.ac.in", "password": "x"}, headers=ip_headers)
+        assert blocked_res.status_code == 429
+        data = blocked_res.get_json()
+        assert data["error"]["code"] == "TOO_MANY_REQUESTS"
+        assert "Retry-After" in blocked_res.headers
+        assert int(blocked_res.headers["Retry-After"]) > 0
+
+        # Advance fake clock by 65 seconds past the sliding window
+        fake_clock += timedelta(seconds=65)
+
+        # Request 5 should now succeed and not be rate limited
+        recovered_res = test_client.post("/api/auth/login", json={"identifier": "unknown_5@parul.ac.in", "password": "x"}, headers=ip_headers)
+        assert recovered_res.status_code == 404
+
+    finally:
+        app.config["RATE_LIMIT_ENABLED"] = False
+        app.config.pop("CLOCK_FN", None)
+
+def test_phase5_sqlite_rate_limiting_email_with_fake_clock(test_client):
+    """
+    Phase 5 Requirement 3:
+    SQLite-backed rate limiting per email on login endpoint across different IPs with fake clock.
+    """
+    app.config["RATE_LIMIT_ENABLED"] = True
+    app.config["RATE_LIMIT_LOGIN_MAX"] = 3
+    app.config["RATE_LIMIT_WINDOW_SECONDS"] = 60
+
+    fake_clock = datetime(2026, 10, 1, 11, 0, 0, tzinfo=timezone.utc)
+    app.config["CLOCK_FN"] = lambda: fake_clock
+
+    target_email = "target_user@parul.ac.in"
+
+    try:
+        # 3 requests targeting the same email from different IPs
+        for i in range(3):
+            headers = {"X-Forwarded-For": f"198.51.100.{100 + i}"}
+            res = test_client.post("/api/auth/login", json={"identifier": target_email, "password": "x"}, headers=headers)
+            assert res.status_code == 404
+
+        # 4th request from a brand new IP targeting the same email must trigger account rate limit (429)
+        new_headers = {"X-Forwarded-For": "203.0.113.88"}
+        blocked_res = test_client.post("/api/auth/login", json={"identifier": target_email, "password": "x"}, headers=new_headers)
+        assert blocked_res.status_code == 429
+        data = blocked_res.get_json()
+        assert data["error"]["code"] == "TOO_MANY_REQUESTS"
+        assert data["error"]["details"]["limit_type"] == "email"
+
+        # Advance fake clock past window
+        fake_clock += timedelta(seconds=65)
+
+        recovered_res = test_client.post("/api/auth/login", json={"identifier": target_email, "password": "x"}, headers=new_headers)
+        assert recovered_res.status_code == 404
+
+    finally:
+        app.config["RATE_LIMIT_ENABLED"] = False
+        app.config.pop("CLOCK_FN", None)
+
+def test_phase5_sanitized_500_error_response(test_client, monkeypatch):
+    """
+    Phase 5 Requirement 4:
+    Sanitized errors: unhandled server exceptions return generic 500 JSON without leaking
+    stack traces, file paths, or raw SQL queries to the client.
+    """
+    import sqlite3
+    def broken_connection(*args, **kwargs):
+        raise sqlite3.OperationalError("deliberate syntax error in SELECT * FROM secret_table_internal")
+
+    monkeypatch.setattr("app.get_connection", broken_connection)
+
+    res = test_client.get("/api/auth/me", headers={"Authorization": "Bearer mock-token-triggering-db"})
+    assert res.status_code == 500
+    data = res.get_json()
+    assert data["success"] is False
+    assert data["error"]["code"] == "INTERNAL_SERVER_ERROR"
+    assert "An internal server error occurred" in data["error"]["message"]
+    # Verify no raw SQL or traceback leak in response body
+    raw_body = res.get_data(as_text=True)
+    assert "Traceback" not in raw_body
+    assert "secret_table_internal" not in raw_body
+    assert "OperationalError" not in raw_body
+
+def test_phase5_production_safety_checks_at_startup():
+    """
+    Phase 5 Requirement 5:
+    Production safety checks at startup when DEMO_MODE=false:
+    Require SECRET_KEY (>= 32 chars and not default), ALLOWED_ORIGINS (no wildcard),
+    and all SMTP settings.
+    """
+    # 1. Missing SECRET_KEY
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration({"DEMO_MODE": "false"})
+    assert "SECRET_KEY" in str(exc.value)
+
+    # 2. Insecure default dev SECRET_KEY
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration({
+            "DEMO_MODE": "false",
+            "SECRET_KEY": "dev-insecure-secret-key-change-in-production-min32chars"
+        })
+    assert "SECRET_KEY" in str(exc.value)
+
+    # 3. Short SECRET_KEY (< 32 chars)
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration({
+            "DEMO_MODE": "false",
+            "SECRET_KEY": "too-short-secret"
+        })
+    assert "SECRET_KEY" in str(exc.value)
+
+    # 4. Missing ALLOWED_ORIGINS
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration({
+            "DEMO_MODE": "false",
+            "SECRET_KEY": "a" * 32
+        })
+    assert "ALLOWED_ORIGINS" in str(exc.value)
+
+    # 5. Wildcard ALLOWED_ORIGINS
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration({
+            "DEMO_MODE": "false",
+            "SECRET_KEY": "a" * 32,
+            "ALLOWED_ORIGINS": "*"
+        })
+    assert "ALLOWED_ORIGINS" in str(exc.value)
+
+    # 6. Missing SMTP configuration
+    with pytest.raises(RuntimeError) as exc:
+        validate_production_configuration({
+            "DEMO_MODE": "false",
+            "SECRET_KEY": "a" * 32,
+            "ALLOWED_ORIGINS": "https://example.com"
+        })
+    assert "SMTP settings are required" in str(exc.value)
+
+    # 7. Valid production configuration passes smoothly
+    assert validate_production_configuration({
+        "DEMO_MODE": "false",
+        "SECRET_KEY": "a" * 32,
+        "ALLOWED_ORIGINS": "https://example.com",
+        "SMTP_HOST": "smtp.gmail.com",
+        "SMTP_PORT": "587",
+        "SMTP_USER": "demo@domain.com",
+        "SMTP_PASS": "secret",
+        "SMTP_FROM": "noreply@domain.com"
+    }) is True
+
+def test_phase5_production_mode_does_not_seed_demo_users(monkeypatch):
+    """
+    Phase 5 Requirement 5:
+    When DEMO_MODE=false, init_db never seeds demo users with known passwords.
+    """
+    prod_fd, prod_path = tempfile.mkstemp(suffix="_prod_clean.db")
+    try:
+        monkeypatch.setenv("DEMO_MODE", "false")
+        init_db(db_path=prod_path, force_reseed=True)
+
+        conn = get_connection(prod_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        user_count = cursor.fetchone()[0]
+        conn.close()
+
+        assert user_count == 0, f"Expected 0 users in production mode, found {user_count}"
+    finally:
+        os.close(prod_fd)
+        if os.path.exists(prod_path):
+            os.remove(prod_path)
+
+def test_phase5_production_mode_does_not_print_or_store_otp(capsys, monkeypatch):
+    """
+    Phase 5 Requirement 5:
+    When DEMO_MODE=false, dispatch_otp never prints OTPs to console and does not store
+    them in app.config['LAST_DISPATCHED_OTP'].
+    """
+    monkeypatch.setenv("DEMO_MODE", "false")
+    app.config.pop("LAST_DISPATCHED_OTP", None)
+
+    dispatch_otp("secure_user@parul.ac.in", "+91 99999 00000", "849201")
+
+    captured = capsys.readouterr()
+    assert "849201" not in captured.out
+    assert "849201" not in captured.err
+    assert "LAST_DISPATCHED_OTP" not in app.config
+
+def test_phase5_multi_worker_concurrency_safety_for_overdue_evaluator():
+    """
+    Phase 5 Requirement 6:
+    Validates that the background overdue dose evaluator behaves correctly when 2+ workers
+    execute evaluate_overdue_doses concurrently on the same dataset.
+    Proves that atomic SQL conditional updates prevent duplicate medication_history rows
+    and duplicate caregiver notifications.
+    """
+    concurrency_fd, concurrency_path = tempfile.mkstemp(suffix="_concurrency.db")
+    try:
+        init_db(db_path=concurrency_path, force_reseed=True)
+        conn = get_connection(concurrency_path)
+        cursor = conn.cursor()
+
+        # Insert patient (id 10) and caregiver (id 20) with valid password_hash
+        cursor.execute("INSERT OR REPLACE INTO users (id, name, email, phone, role, password_hash) VALUES (10, 'Conc Patient', 'conc_pt@test.com', '123', 'patient', 'hash10')")
+        cursor.execute("INSERT OR REPLACE INTO users (id, name, email, phone, role, password_hash) VALUES (20, 'Conc Caregiver', 'conc_cg@test.com', '456', 'caregiver', 'hash20')")
+        cursor.execute("INSERT OR REPLACE INTO caregiver_patient (caregiver_id, patient_id, status) VALUES (20, 10, 'Active')")
+        cursor.execute("INSERT OR REPLACE INTO medicines (id, user_id, name, dosage_amount, dosage_unit, frequency, start_date) VALUES (50, 10, 'ConcMed', '500', 'mg', 'once', '2026-10-01')")
+
+        # Insert an overdue dose instance (scheduled 2 hours ago)
+        overdue_scheduled = "2026-10-01T06:00:00+00:00"
+        cursor.execute("""
+            INSERT INTO dose_instances (id, user_id, medicine_id, reminder_id, medicine_name, dosage, scheduled_for, local_time, status)
+            VALUES (999, 10, 50, 1, 'ConcMed', '500 mg', ?, '11:30', 'pending')
+        """, (overdue_scheduled,))
+        conn.commit()
+        conn.close()
+
+        # Fixed evaluation time well past the grace window
+        eval_clock = datetime(2026, 10, 1, 9, 0, 0, tzinfo=timezone.utc)
+
+        import concurrent.futures
+        def worker_task(worker_id):
+            c = get_connection(concurrency_path)
+            try:
+                evaluate_overdue_doses(user_id=10, clock=eval_clock, conn=c)
+            finally:
+                c.close()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(worker_task, i) for i in range(2)]
+            concurrent.futures.wait(futures)
+
+        # Verify results in database:
+        verify_conn = get_connection(concurrency_path)
+        v_cursor = verify_conn.cursor()
+
+        # 1. Dose must be marked missed
+        v_cursor.execute("SELECT status FROM dose_instances WHERE id = 999")
+        dose_status = v_cursor.fetchone()[0]
+        assert dose_status == "missed"
+
+        # 2. Exactly ONE history entry must exist (no duplicate!)
+        v_cursor.execute("SELECT COUNT(*) FROM medication_history WHERE user_id = 10 AND status = 'missed'")
+        history_count = v_cursor.fetchone()[0]
+        assert history_count == 1, f"Expected exactly 1 history row, found {history_count}"
+
+        # 3. Exactly ONE caregiver notification must exist (no duplicate!)
+        v_cursor.execute("SELECT COUNT(*) FROM notifications WHERE user_id = 20 AND type = 'missed_dose'")
+        notif_count = v_cursor.fetchone()[0]
+        assert notif_count == 1, f"Expected exactly 1 notification, found {notif_count}"
+
+        verify_conn.close()
+    finally:
+        os.close(concurrency_fd)
+        if os.path.exists(concurrency_path):
+            os.remove(concurrency_path)
 

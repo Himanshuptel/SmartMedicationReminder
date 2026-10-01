@@ -746,7 +746,7 @@ export default function DashboardScreen({
               </div>
             ) : (
               <p style={{ marginTop: 12, fontSize: '0.85rem', color: 'var(--color-text-2)' }}>
-                Click <strong>Generate New Invite Code</strong> to create an 8-character single-use link for your doctor or family caregiver.
+                Click <strong>Generate New Invite Code</strong> to create a single-use invite code (e.g. <code>INV-A1B2C3</code>) for your doctor or family caregiver.
               </p>
             )}
           </div>
@@ -1013,7 +1013,7 @@ export default function DashboardScreen({
               <div>
                 <h3 className="card-title">Link New Patient via Invite Code</h3>
                 <p className="card-sub">
-                  Ask your patient to generate a secure 8-character invite code from their Schedule screen.
+                  Ask your patient to generate a secure invite code (e.g. <code>INV-A1B2C3</code>) from their Schedule screen.
                 </p>
               </div>
             </div>
@@ -1032,12 +1032,12 @@ export default function DashboardScreen({
             <form onSubmit={handleRedeemInvite} style={{ display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
               <input
                 type="text"
-                placeholder="Enter 8-character code (e.g. ABC12345)"
+                placeholder="Enter invite code (e.g. INV-A1B2C3)"
                 value={redeemCode}
                 onChange={e => setRedeemCode(e.target.value.toUpperCase())}
                 className="form-input"
                 style={{ flex: 1, minWidth: 220, fontFamily: 'monospace', letterSpacing: '2px', textTransform: 'uppercase' }}
-                maxLength={8}
+                maxLength={12}
                 required
               />
               <button
@@ -1226,7 +1226,7 @@ export default function DashboardScreen({
               <div>
                 <h3 className="card-title">Establish Clinical Oversight via Invite Code</h3>
                 <p className="card-sub">
-                  Clinician access is strictly patient-approved. Enter the 8-character invite code provided by your patient.
+                  Clinician access is strictly patient-approved. Enter the invite code (e.g. <code>INV-A1B2C3</code>) provided by your patient.
                 </p>
               </div>
             </div>
@@ -1245,12 +1245,12 @@ export default function DashboardScreen({
             <form onSubmit={handleRedeemInvite} style={{ display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
               <input
                 type="text"
-                placeholder="Enter 8-character code (e.g. ABC12345)"
+                placeholder="Enter invite code (e.g. INV-A1B2C3)"
                 value={redeemCode}
                 onChange={e => setRedeemCode(e.target.value.toUpperCase())}
                 className="form-input"
                 style={{ flex: 1, minWidth: 220, fontFamily: 'monospace', letterSpacing: '2px', textTransform: 'uppercase' }}
-                maxLength={8}
+                maxLength={12}
                 required
               />
               <button

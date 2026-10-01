@@ -31,12 +31,19 @@ async function request(endpoint, options = {}) {
       headers
     });
   } catch (netErr) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('medremind:backend-offline', { detail: { url, error: netErr } }));
+    }
     const error = new Error(
       `Cannot connect to backend server at ${url}. Please ensure the Python API server is running.`
     );
     error.isNetworkError = true;
     error.originalError = netErr;
     throw error;
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('medremind:backend-online'));
   }
 
   const data = await response.json().catch(() => ({}));
@@ -353,9 +360,12 @@ export const api = {
     };
   },
 
-  // --- Concrete Dose Instances (Phase 3) ---
-  async getDosesToday(patientId = null) {
-    const query = patientId ? `?patient_id=${patientId}` : '';
+  // --- Concrete Dose Instances (Phase 3 & 4) ---
+  async getDosesToday(patientId = null, date = null) {
+    const params = new URLSearchParams();
+    if (patientId) params.append('patient_id', patientId);
+    if (date) params.append('date', date);
+    const query = params.toString() ? `?${params.toString()}` : '';
     const res = await request(`/doses/today${query}`);
     return res.doses || [];
   },

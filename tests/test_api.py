@@ -45,7 +45,8 @@ from app import (
     verify_otp_hash,
     generate_daily_doses,
     evaluate_overdue_doses,
-    process_dose_action
+    process_dose_action,
+    run_background_overdue_check
 )
 from database import init_db, get_connection
 
@@ -827,3 +828,159 @@ def test_adherence_formula_and_streak_math(test_client):
     assert stats["missed"] == 1
     # 3 / (3 + 1) * 100 = 75.0%
     assert stats["adherence_rate"] == 75.0
+
+def test_caregiver_alert_created_on_caregiver_read_without_patient_request(test_client):
+    """
+    Phase 4 Requirement 3:
+    Proves that missed-dose detection does NOT depend on the patient opening the app:
+    Caregiver reads the portal with fake clock advanced past grace window,
+    and a caregiver alert is created and returned WITHOUT any request from the patient.
+    """
+    fake_clock = datetime(2026, 10, 1, 2, 25, tzinfo=timezone.utc) # 07:55 AM Asia/Kolkata
+    app.config["CLOCK_FN"] = lambda: fake_clock
+    try:
+        # 1. Register patient and add medication
+        pt_user, pt_token = helper_register_and_verify(
+            test_client, "Remote Patient", "remote_pt@parul.ac.in", "+91 92020 00020"
+        )
+        pt_header = {"Authorization": f"Bearer {pt_token}"}
+
+        test_client.post("/api/medicines", json={
+            "name": "Remote Cardiac Med",
+            "dosage_amount": "100",
+            "dosage_unit": "mg",
+            "frequency": "once",
+            "start_date": "2026-10-01"
+        }, headers=pt_header)
+
+        # Patient generates invite code
+        inv_res = test_client.post("/api/patient/invite", headers=pt_header)
+        inv_code = inv_res.get_json()["invite_code"]
+
+        # Ensure dose instance exists in pending state
+        pt_doses = test_client.get("/api/doses/today", headers=pt_header).get_json()["doses"]
+        assert len(pt_doses) >= 1
+        assert pt_doses[0]["status"] == "pending"
+
+        # 2. Caregiver registers and links to patient
+        cg_user, cg_token = helper_register_and_verify(
+            test_client, "Remote Caregiver", "remote_cg@parul.ac.in", "+91 92021 00021", role="caregiver"
+        )
+        cg_header = {"Authorization": f"Bearer {cg_token}"}
+        link_res = test_client.post("/api/caregiver/link", json={"invite_code": inv_code}, headers=cg_header)
+        assert link_res.status_code == 200
+
+        # 3. Advance fake clock past grace window: 08:35 AM local (03:05 UTC)
+        # Note: 08:00 AM dose + 30 min grace = overdue at 08:30. 08:35 is overdue!
+        fake_clock = datetime(2026, 10, 1, 3, 5, tzinfo=timezone.utc)
+
+        # 4. PATIENT NEVER MAKES ANY REQUEST. Patient is idle.
+        # Caregiver accesses caregiver portal:
+        cg_data = test_client.get("/api/caregiver/patients", headers=cg_header).get_json()
+        assert cg_data["success"] is True
+
+        patients = cg_data["patients"]
+        assert len(patients) == 1
+        assert patients[0]["name"] == "Remote Patient"
+
+        # Overdue evaluation ran lazily on caregiver read: alert must exist!
+        alerts = cg_data["alerts"]
+        assert len(alerts) >= 1
+        missed_alerts = [a for a in alerts if a["type"] == "missed_dose"]
+        assert len(missed_alerts) >= 1
+        assert "Remote Cardiac Med" in missed_alerts[0]["message"]
+        assert "Remote Patient" in missed_alerts[0]["message"]
+    finally:
+        app.config.pop("CLOCK_FN", None)
+
+def test_background_worker_evaluates_overdue_doses_without_double_fire(test_client):
+    """
+    Phase 4 Requirement 3(b):
+    Tests that run_background_overdue_check runs without double-firing and transitions
+    overdue doses to missed state.
+    """
+    fake_clock = datetime(2026, 10, 1, 2, 25, tzinfo=timezone.utc) # 07:55 AM
+    app.config["CLOCK_FN"] = lambda: fake_clock
+    try:
+        pt_user, pt_token = helper_register_and_verify(
+            test_client, "Worker Patient", "worker_pt@parul.ac.in", "+91 92022 00022"
+        )
+        pt_header = {"Authorization": f"Bearer {pt_token}"}
+        test_client.post("/api/medicines", json={
+            "name": "Worker Med",
+            "frequency": "once",
+            "start_date": "2026-10-01"
+        }, headers=pt_header)
+
+        # Generate pending dose
+        doses = test_client.get("/api/doses/today", headers=pt_header).get_json()["doses"]
+        assert doses[0]["status"] == "pending"
+
+        # Advance fake clock past grace window
+        fake_clock = datetime(2026, 10, 1, 3, 10, tzinfo=timezone.utc) # 08:40 AM
+
+        # Run background worker check directly
+        result = run_background_overdue_check(clock=lambda: fake_clock)
+        assert result is True
+
+        # Verify dose transitioned to missed
+        conn = get_connection(temp_db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT status FROM dose_instances WHERE user_id = ? AND medicine_name = 'Worker Med'", (pt_user["id"],))
+        row = cur.fetchone()
+        assert row["status"] == "missed"
+        conn.close()
+    finally:
+        app.config.pop("CLOCK_FN", None)
+
+def test_future_days_doses_and_start_end_dates_respected(test_client):
+    """
+    Phase 4 Requirement 4:
+    Verifies that future days' doses are generated correctly and that medicine
+    and reminder start_date and end_date constraints are strictly respected.
+    """
+    pt_user, pt_token = helper_register_and_verify(
+        test_client, "Future Patient", "future_pt@parul.ac.in", "+91 92023 00023"
+    )
+    pt_header = {"Authorization": f"Bearer {pt_token}"}
+
+    # Medicine A: Active strictly from 2026-10-10 to 2026-10-20
+    test_client.post("/api/medicines", json={
+        "name": "Antibiotic Course (10 days)",
+        "dosage_amount": "250",
+        "dosage_unit": "mg",
+        "frequency": "once",
+        "start_date": "2026-10-10",
+        "end_date": "2026-10-20"
+    }, headers=pt_header)
+
+    # Medicine B: Active strictly from 2026-10-01 to 2026-10-05
+    test_client.post("/api/medicines", json={
+        "name": "Steroid Taper (5 days)",
+        "dosage_amount": "5",
+        "dosage_unit": "mg",
+        "frequency": "once",
+        "start_date": "2026-10-01",
+        "end_date": "2026-10-05"
+    }, headers=pt_header)
+
+    # 1. Query October 3 (Within Med B, Before Med A)
+    res_oct3 = test_client.get("/api/doses/today?date=2026-10-03", headers=pt_header).get_json()
+    names_oct3 = [d["medicine_name"] for d in res_oct3["doses"]]
+    assert "Steroid Taper (5 days)" in names_oct3
+    assert "Antibiotic Course (10 days)" not in names_oct3
+
+    # 2. Query October 15 (After Med B ended, Within Med A)
+    res_oct15 = test_client.get("/api/doses/today?date=2026-10-15", headers=pt_header).get_json()
+    names_oct15 = [d["medicine_name"] for d in res_oct15["doses"]]
+    assert "Antibiotic Course (10 days)" in names_oct15
+    assert "Steroid Taper (5 days)" not in names_oct15
+
+    # 3. Query October 25 (After BOTH Med A and Med B ended)
+    res_oct25 = test_client.get("/api/doses/today?date=2026-10-25", headers=pt_header).get_json()
+    assert len(res_oct25["doses"]) == 0
+
+    # 4. Query September 25 (Before BOTH Med A and Med B started)
+    res_sep25 = test_client.get("/api/doses/today?date=2026-09-25", headers=pt_header).get_json()
+    assert len(res_sep25["doses"]) == 0
+

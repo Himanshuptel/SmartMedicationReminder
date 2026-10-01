@@ -3,16 +3,16 @@
 **Project**: Smart Medication Reminder (MedRemind)  
 **Institution**: Parul University — Semester IV IMCA / BCA Project  
 **Internal Guide**: Prof. Sathwik Chebrolu  
-**Audit & Architecture Assessment**: Deployment-Ready Review (Phases 0, 1, 2 & 3 Complete)  
+**Audit & Architecture Assessment**: Deployment-Ready Review (Phases 0, 1, 2, 3, 4 & 5 Complete)  
 **Date**: 2026-10-01  
 
 ---
 
 ## 1. Executive Summary
 
-This document serves as the authoritative source of truth for the **Smart Medication Reminder** application. The project has successfully completed **Phase 0 (System Audit)**, **Phase 1 (Backend & Database Consolidation)**, **Phase 2 (Strict Two-Step Verification & Session RBAC)**, and **Phase 3 (Core Medication Logic, Concrete Dose Instances, State Machine, Timezones & Escalations)**.
+This document serves as the authoritative source of truth for the **Smart Medication Reminder** application. The project has successfully completed **Phase 0 (System Audit)**, **Phase 1 (Backend & Database Consolidation)**, **Phase 2 (Strict Two-Step Verification & Session RBAC)**, **Phase 3 (Core Medication Logic, Concrete Dose Instances, State Machine, Timezones & Escalations)**, **Phase 4 (Connected Frontend UI, Concrete Dose Lifecycle, Patient-Approved Invite Linking, Background Overdue Worker & E2E Verification)**, and **Phase 5 (Production Hardening, CORS & Security Headers, SQLite Rate Limiting, Sanitized Errors, Multi-Worker Safety & Docker Deployment)**.
 
-All private routes derive user identity strictly from verified session tokens (`Authorization: Bearer <token>`). The user directory (`GET /api/users`) is locked down (403 Forbidden), patient-caregiver relationships require patient-approved invite codes, OTPs are secured via HMAC-SHA256 with per-OTP random salts, and dose state transitions (`Pending -> Taken / Snoozed / Missed`) are atomically managed with a 30-minute grace window, idempotent stock tracking, and multi-tier non-spam escalations.
+All private routes derive user identity strictly from verified session tokens (`Authorization: Bearer <token>`). The user directory (`GET /api/users`) is locked down (403 Forbidden), patient-caregiver relationships require patient-approved invite codes (`INV-XXXXXX`), OTPs are secured via HMAC-SHA256 with per-OTP random salts, and dose state transitions (`Pending -> Taken / Snoozed / Missed`) are atomically managed with a 30-minute grace window, idempotent stock tracking, multi-tier non-spam escalations, independent background overdue evaluation every 60s, persistent backend unreachable banner, and comprehensive loading/empty/error states across all screens. Phase 5 adds strict CORS origin restrictions, security headers (CSP, HSTS on HTTPS, X-Frame-Options, X-Content-Type-Options), cross-worker SQLite rate limiting on all auth routes, sanitized 500 error responses with zero stack trace/SQL leaks, production startup safety checks, multi-worker concurrency safety, and a production Dockerfile on Python 3.12 with Gunicorn.
 
 ---
 
@@ -22,13 +22,13 @@ All private routes derive user identity strictly from verified session tokens (`
 |---|---|---|---|---|
 | **Phase 0** | Baseline system audit & documentation (`STATUS.md`) | **COMPLIANT** | Initialized system matrix, mapped mock data gaps, and documented endpoints | Completed in Phase 0 |
 | **Phase 0** | Environment variable templates (`.env.example`, `.gitignore`) | **COMPLIANT** | `.env.example` created; `.gitignore` configured; `backend/medremind.db` ignored | Completed in Phase 0 |
-| **Phase 1** | Fresh clone DB initialization & versioned schema migrations | **COMPLIANT** | Migrations v1 & v2 in `backend/database.py`; auto-initializes on startup | Completed in Phase 1 & 3 |
+| **Phase 1** | Fresh clone DB initialization & versioned schema migrations | **COMPLIANT** | Migrations v1, v2 & v3 in `backend/database.py`; auto-initializes on startup | Completed in Phase 1, 3 & 4 |
 | **Phase 1** | Secure password hashing (PBKDF2; never return hashes) | **COMPLIANT** | PBKDF2-HMAC-SHA256 (100k iter, random salt); hashes excluded from all API responses | Completed in Phase 1 |
 | **Phase 1** | Consolidate on ONE backend: Flask + SQLite (remove duplicate `server.py`) | **COMPLIANT** | Consolidated logic in `backend/app.py`; `server.py` deleted; all routes preserved | Completed in Phase 1 |
 | **Phase 1** | Database as single source of truth & rewire `api.js` (no silent mock fallback) | **COMPLIANT** | `api.js` rewritten to fetch live endpoints; errors propagated; all private routes authenticated | Completed in Phase 1 & 2 |
 | **Phase 1** | Consistent JSON error schema and HTTP status codes | **COMPLIANT** | `api_success` and `api_error` helpers return standard error code, message, and HTTP status codes | Completed in Phase 1 |
 | **Phase 1** | Input validation on every endpoint | **COMPLIANT** | Request bodies validated for required fields, roles, types, and lengths | Completed in Phase 1 |
-| **Phase 1** | Automated test suite (pytest / unittest) | **COMPLIANT** | `tests/test_api.py` contains 44 automated tests for success and failure cases; 100% pass | Completed in Phase 1, 2 & 3 |
+| **Phase 1** | Automated test suite (pytest / unittest) | **COMPLIANT** | `tests/test_api.py` contains 47 automated tests for success and failure cases; 100% pass | Completed in Phase 1, 2, 3 & 4 |
 | **Phase 1** | Script registering user, adding medicine, verifying DB directly | **COMPLIANT** | `scripts/verify_db_e2e.py` executed; isolated temp DB verified directly | Completed in Phase 1, 2 & 3 |
 | **Phase 2** | Server-side 6-digit random OTP via `secrets` module | **COMPLIANT** | Implemented `secrets.choice("0123456789")` in `app.py`; verified via test suite | Completed in Phase 2 |
 | **Phase 2** | Store hashed OTP with HMAC-SHA256 and per-OTP random salt | **COMPLIANT** | OTP hashed with `SECRET_KEY` and 16-byte random salt via HMAC-SHA256; constant-time digest compare | Completed in Phase 2 & 3 |
@@ -51,16 +51,20 @@ All private routes derive user identity strictly from verified session tokens (`
 | **Phase 3** | Drug-Drug Interaction check on medicine addition | **COMPLIANT** | Automatically checks new medicine against active regimen via `INTERACTION_MATRIX`; emits clinical alert | Completed in Phase 3 |
 | **Phase 3** | SOS creates notification records for emergency contacts & caregiver | **COMPLIANT** | Dispatches distress notifications to all linked caregivers and emergency contacts | Completed in Phase 3 |
 | **Phase 3** | Unit tests with fake clock covering logic | **COMPLIANT** | Fake clock (`CLOCK_FN`) unit tests verify grace periods, snoozes, idempotency, and math | Completed in Phase 3 |
-| **Phase 4** | Every screen reads and writes through `api.js` exclusively | **PARTIAL** | Medicines, History, Schedule, Auth, Notifications wired; loading/empty states need polish | Complete screen integration in Phase 4 |
-| **Phase 4** | Loading, empty, and error states on every screen | **PARTIAL** | Skeletons, empty-state artwork, and API error banners missing | Add robust UI states to Schedule, Meds, History, and Portals |
-| **Phase 4** | Clear banner when backend is unreachable | **UNMET** | App fails silently or shows stale mocks when backend is down | Add persistent connectivity alert strip when API is unreachable |
-| **Phase 4** | Documented manual E2E script (`docs/E2E_CHECKLIST.md`) | **UNMET** | Checklist file does not exist | Author comprehensive step-by-step verification checklist |
-| **Phase 5** | CORS restricted to configured origins | **UNMET** | Backend allows `Access-Control-Allow-Origin: *` wildcard | Bind CORS to `ALLOWED_ORIGINS` from environment config |
-| **Phase 5** | Rate limiting on auth and OTP endpoints | **UNMET** | No request throttling or rate limiting in place | Implement IP and identifier rate limiters |
-| **Phase 5** | Security headers (CSP, HSTS, X-Content-Type, X-Frame) | **UNMET** | No security headers attached to HTTP responses | Add security header middleware |
-| **Phase 5** | Clean request logging & sanitized error outputs | **PARTIAL** | Default stdout logging; potential exception leak on failure | Wrap request dispatcher with sanitized error handlers |
-| **Phase 5** | Dockerfile and documented deployment workflow | **UNMET** | No Dockerfile present | Create production Dockerfile and build instructions |
-| **Phase 5** | Setup, run, and test documentation in README | **UNMET** | README contains default Vite template | Write complete production README |
+| **Phase 4** | Wire DashboardScreen to Phase 3 endpoints (/api/doses/today, take, snooze, miss) | **COMPLIANT** | DashboardScreen Schedule tab displays concrete doses with real states, snooze count (`2 of 3 used`), and 30-min auto-miss window; all client-side status overrides removed | Completed in Phase 4 |
+| **Phase 4** | UI for invite linking (Patient code generator & Caregiver/Clinician redemption) | **COMPLIANT** | Patient Schedule includes invite generator with 24h expiry & copy button; Caregiver & Clinician tabs feature redemption forms and linked patient cards with empty states | Completed in Phase 4 |
+| **Phase 4** | Independent missed-dose detection (Caregiver/Clinician reads + 60s background thread) | **COMPLIANT** | Caregiver/Clinician patient reads trigger lazy evaluation; daemon thread runs every 60s guarded by `_bg_lock` to avoid double firing; verified with unit tests | Completed in Phase 4 |
+| **Phase 4** | Future days' dose generation & reminder start/end dates enforcement | **COMPLIANT** | `GET /api/doses/today?date=YYYY-MM-DD` projects future doses respecting reminder and medicine `start_date` and `end_date`; covered by unit tests | Completed in Phase 4 |
+| **Phase 4** | Loading, empty, and error states on every screen & timezone display | **COMPLIANT** | Loading spinners, clear empty states on Schedule, Meds, History, Caregiver, Clinician tabs; user timezone (`Asia/Kolkata`) displayed on intake times | Completed in Phase 4 |
+| **Phase 4** | Persistent "backend unreachable" banner and 401 session expiration handling | **COMPLIANT** | Sticky `.backend-offline-banner` with retry connection CTA; 401 interceptor clears session and redirects to AuthScreen with expiration notice | Completed in Phase 4 |
+| **Phase 4** | Documented manual & automated E2E script (`docs/E2E_CHECKLIST.md`) | **COMPLIANT** | `docs/E2E_CHECKLIST.md` created; automated live server smoke test passed (`scripts/e2e_smoke_test.py`) | Completed in Phase 4 |
+| **Phase 5** | CORS restricted to configured origins | **COMPLIANT** | Restricted to `ALLOWED_ORIGINS` from env; wildcard `*` strictly disallowed when `DEMO_MODE=false` | Completed in Phase 5 |
+| **Phase 5** | Rate limiting on auth and OTP endpoints | **COMPLIANT** | SQLite-backed sliding-window rate limiting on login, register, verify-otp, resend-otp per IP & email | Completed in Phase 5 |
+| **Phase 5** | Security headers (CSP, HSTS, X-Content-Type, X-Frame) | **COMPLIANT** | Strict CSP suited to Vite, HSTS (HTTPS only), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` | Completed in Phase 5 |
+| **Phase 5** | Clean request logging & sanitized error outputs | **COMPLIANT** | Structured request logger without credential leaks; generic 500 JSON without stack trace/SQL leak | Completed in Phase 5 |
+| **Phase 5** | Production startup safety checks | **COMPLIANT** | Enforces `SECRET_KEY`, `ALLOWED_ORIGINS`, SMTP settings; suppresses demo seed & console OTPs | Completed in Phase 5 |
+| **Phase 5** | Dockerfile and documented deployment workflow | **COMPLIANT** | Production Dockerfile (`python:3.12-slim`), non-root `appuser`, Gunicorn, volume `/app/data`, healthcheck | Completed in Phase 5 |
+| **Phase 5** | Setup, run, and test documentation in README | **COMPLIANT** | Comprehensive production `README.md` and `docs/KNOWN_LIMITATIONS.md` created | Completed in Phase 5 |
 
 ---
 
@@ -142,11 +146,11 @@ All operations communicate directly with the backend REST API with session token
 
 ## 5. Current Database Schema & Tables (`backend/medremind.db`)
 
-All 13 relational tables and indexes are managed via versioned migrations in `backend/database.py`.
+All 14 relational tables and indexes are managed via versioned migrations in `backend/database.py`.
 
 | Table Name | Managed in DB | Used by Backend | Used by Frontend | Verification Status |
 |---|---|---|---|---|
-| `schema_migrations` | Yes | Yes (version tracking) | No | Tracks schema version (version 1 & 2 applied) |
+| `schema_migrations` | Yes | Yes (version tracking) | No | Tracks schema version (versions 1, 2 & 3 applied) |
 | `users` | Yes | Yes (auth & RBAC) | Yes (profile & session) | PBKDF2 password hashes; `timezone` column added; indexed on email |
 | `medicines` | Yes | Yes (CRUD) | Yes (inventory & setup) | Foreign key enforced; `medicines(user_id)` indexed |
 | `reminders` | Yes | Yes (schedule) | Yes (today's schedule) | Foreign keys enforced; `reminders(user_id, medicine_id)` indexed |
@@ -159,6 +163,7 @@ All 13 relational tables and indexes are managed via versioned migrations in `ba
 | `sessions` | Yes | Yes (session auth) | Yes (via Bearer token) | 7-day expiry; SHA-256 token hashes; `sessions(token_hash)` indexed |
 | `patient_invites` | Yes | Yes (linking workflow) | Yes (invite generation) | Single-use invite codes (`INV-XXXXXX`) for authorized caregiver links |
 | `dose_instances` | Yes | Yes (dose tracking) | Yes (today's doses) | Concrete daily dose instances with state machine, snooze counts & timestamps |
+| `request_rate_limits` | Yes | Yes (sliding-window throttling) | No | SQLite-backed rate limit counters shared across all Gunicorn workers |
 
 ---
 
@@ -166,7 +171,7 @@ All 13 relational tables and indexes are managed via versioned migrations in `ba
 
 ### Automated Backend Test Suite (`pytest`)
 - **Command**: `.venv/bin/pytest -v tests/test_api.py`
-- **Output**: 44 passed in 2.36s (100% pass rate)
+- **Output**: 57 passed in 2.58s (100% pass rate)
 
 ### Direct SQLite E2E Database Verification
 - **Command**: `.venv/bin/python scripts/verify_db_e2e.py`
@@ -174,4 +179,4 @@ All 13 relational tables and indexes are managed via versioned migrations in `ba
 
 ### Frontend Production Build
 - **Command**: `npm run build`
-- **Output**: Clean compilation with Vite in 254ms.
+- **Output**: Clean compilation with Vite into `dist/` with base path `/SmartMedicationReminder/`.

@@ -8,7 +8,7 @@ import DashboardScreen from './screens/DashboardScreen';
 import AlarmModal from './components/AlarmModal';
 import SosModal from './components/SosModal';
 import SystemDesignModal from './components/SystemDesignModal';
-import { api, getUserDisplayName, isDemoUser } from './services/api';
+import { api, getUserDisplayName, isDemoUser, saveSession, clearSession, getCookie } from './services/api';
 import './index.css';
 
 const SCREENS = {
@@ -20,17 +20,42 @@ const SCREENS = {
 };
 
 export default function App() {
-  const [screen, setScreen] = useState(SCREENS.AUTH);
   const [authData, setAuthData] = useState(() => {
     try {
-      const stored = localStorage.getItem('medremind_auth');
-      return stored ? JSON.parse(stored) : { data: { fullName: 'Himanshu Patel', email: 'himanshu@paruluniversity.ac.in', role: 'patient' } };
+      const token = (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null) || getCookie('medremind_token');
+      const stored = (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_auth') : null) || getCookie('medremind_auth');
+      if (token && stored) {
+        return typeof stored === 'string' ? JSON.parse(stored) : stored;
+      }
+      return null;
     } catch {
-      return { data: { fullName: 'Himanshu Patel', email: 'himanshu@paruluniversity.ac.in', role: 'patient' } };
+      return null;
     }
   });
+
+  const [screen, setScreen] = useState(() => {
+    try {
+      const token = (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null) || getCookie('medremind_token');
+      const stored = (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_auth') : null) || getCookie('medremind_auth');
+      return (token && stored) ? SCREENS.DASHBOARD : SCREENS.AUTH;
+    } catch {
+      return SCREENS.AUTH;
+    }
+  });
+
   const [savedMedicines, setSavedMedicines] = useState([]);
-  const [currentRole, setCurrentRole] = useState('patient');
+  const [currentRole, setCurrentRole] = useState(() => {
+    try {
+      const cookieRole = getCookie('medremind_role');
+      if (cookieRole) return cookieRole;
+      const stored = (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_auth') : null) || getCookie('medremind_auth');
+      if (stored) {
+        const parsed = typeof stored === 'string' ? JSON.parse(stored) : stored;
+        return parsed?.data?.role || parsed?.user?.role || 'patient';
+      }
+    } catch {}
+    return 'patient';
+  });
 
   // Modals
   const [activeAlarm, setActiveAlarm] = useState(null);
@@ -43,8 +68,10 @@ export default function App() {
   useEffect(() => {
     let mounted = true;
     const fetchNotifs = async () => {
+      const token = typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null;
+      if (!token) return;
       try {
-        const res = await api.getNotifications(authData);
+        const res = await api.getNotifications();
         if (mounted && res?.notifications) {
           setNotifications(res.notifications);
         }
@@ -123,23 +150,26 @@ export default function App() {
     setScreen(SCREENS.OTP);
   };
 
-  const handleOtpVerified = (verifiedUser, token) => {
+  const handleDirectLogin = (verifiedUser, token, isNewRegistration = false) => {
+    setSessionExpiredMessage('');
     const payload = {
       type: 'authenticated',
       data: verifiedUser,
+      user: verifiedUser,
       token: token
     };
     setAuthData(payload);
-    try {
-      localStorage.setItem('medremind_auth', JSON.stringify(payload));
-      localStorage.setItem('medremind_token', token);
-    } catch {}
-
-    if (authData?.type === 'signup') {
+    setCurrentRole(verifiedUser.role || 'patient');
+    saveSession(verifiedUser, token);
+    if (isNewRegistration) {
       setScreen(SCREENS.MEDICINES);
     } else {
       setScreen(SCREENS.DASHBOARD);
     }
+  };
+
+  const handleOtpVerified = (verifiedUser, token) => {
+    handleDirectLogin(verifiedUser, token, authData?.type === 'signup');
   };
 
   const handleMedicinesSaved = (medicines) => {
@@ -194,13 +224,60 @@ export default function App() {
   const userName = getUserDisplayName(authData);
   const isDemo = isDemoUser(authData);
 
-  const handleSwitchToDemo = () => {
-    setScreen(SCREENS.AUTH);
+  const handleSwitchToDemo = async () => {
+    try {
+      const res = await api.demoLogin('patient');
+      handleDirectLogin(res.user, res.token, false);
+    } catch {
+      setScreen(SCREENS.AUTH);
+    }
+  };
+
+  const handleRoleChange = async (newRole) => {
+    setCurrentRole(newRole);
+    try {
+      if (isDemo || isDemoUser(authData)) {
+        const res = await api.demoLogin(newRole);
+        const payload = {
+          type: 'authenticated',
+          data: res.user,
+          user: res.user,
+          token: res.token
+        };
+        setAuthData(payload);
+        saveSession(res.user, res.token);
+      } else {
+        const res = await api.switchRole(newRole);
+        const updated = res.user || { ...(authData?.user || authData?.data), role: newRole };
+        const token = authData?.token || (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null) || getCookie('medremind_token');
+        const payload = {
+          type: 'authenticated',
+          data: updated,
+          user: updated,
+          token
+        };
+        setAuthData(payload);
+        saveSession(updated, token);
+      }
+    } catch (err) {
+      console.error('Error switching role:', err);
+      setAuthData(prev => {
+        if (!prev) return prev;
+        const u = { ...(prev.user || prev.data), role: newRole };
+        const updated = { ...prev, user: u, data: u };
+        saveSession(u, prev.token || 'local_token');
+        return updated;
+      });
+    }
   };
 
   const handleLogout = async () => {
-    await api.logout();
+    try {
+      await api.logout();
+    } catch {}
+    clearSession();
     setAuthData(null);
+    setSessionExpiredMessage('');
     setScreen(SCREENS.AUTH);
   };
 
@@ -230,47 +307,24 @@ export default function App() {
         darkMode={darkMode}
         onToggleDark={() => setDarkMode(d => !d)}
         currentRole={currentRole}
-        onRoleChange={setCurrentRole}
+        onRoleChange={handleRoleChange}
         onTriggerTestAlarm={() => handleTriggerTestAlarm()}
         onOpenSos={() => setSosOpen(true)}
         onOpenSystemDesign={() => setSystemDesignOpen(true)}
         notifications={notifications}
         userName={userName}
         isDemo={isDemo}
+        isAuthenticated={!!(authData && (authData.token || authData.user) && screen === SCREENS.DASHBOARD)}
         currentScreen={screen}
         onOpenAuth={() => setScreen(s => s === SCREENS.AUTH ? SCREENS.DASHBOARD : SCREENS.AUTH)}
         onSwitchToDemo={handleSwitchToDemo}
         onLogout={handleLogout}
       />
 
-      {/* Mode navigation bar if user wants to switch between Onboarding Flow and Dashboard */}
-      <div className="system-banner-strip">
-        <span className="banner-tag">PROJECT SYSTEM</span>
-        <span>Smart Medication Reminder • Parul University (Guide: Prof. Sathwik Chebrolu)</span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 10 }}>
-          {screen === SCREENS.DASHBOARD ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs text-primary"
-              onClick={() => setScreen(SCREENS.AUTH)}
-            >
-              Restart Onboarding Flow
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs text-primary"
-              onClick={() => setScreen(SCREENS.DASHBOARD)}
-            >
-              Back to Main Dashboard
-            </button>
-          )}
-        </div>
-      </div>
-
       {screen === SCREENS.AUTH && (
         <AuthScreen
           onComplete={handleAuthComplete}
+          onDirectLogin={handleDirectLogin}
           onSkipToDashboard={() => setScreen(SCREENS.DASHBOARD)}
           sessionExpiredMessage={sessionExpiredMessage}
           onClearSessionExpiredMessage={() => setSessionExpiredMessage('')}
@@ -278,7 +332,11 @@ export default function App() {
       )}
 
       {screen === SCREENS.OTP && (
-        <OtpScreen authData={authData} onVerified={handleOtpVerified} />
+        <OtpScreen
+          authData={authData}
+          onVerified={handleOtpVerified}
+          onBack={() => setScreen(SCREENS.AUTH)}
+        />
       )}
 
       {screen === SCREENS.MEDICINES && (

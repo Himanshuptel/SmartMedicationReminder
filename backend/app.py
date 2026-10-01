@@ -33,6 +33,10 @@ import threading
 import logging
 import time
 from zoneinfo import ZoneInfo
+import io
+import base64
+import pyotp
+import qrcode
 
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
@@ -381,6 +385,46 @@ def dispatch_otp(email: str, phone: str, otp_code: str):
     # In DEV mode only, log to console
     if demo_mode:
         print(f"\n[DEV MODE OTP] >>> Verification Code for {email}: {otp_code} <<<\n", flush=True)
+
+# ── TOTP (Google Authenticator RFC 6238) Helpers ───────────────────
+
+def get_or_create_totp_secret(user_id: int, email: str) -> str:
+    """
+    Retrieves or generates a Base32 secret for Google Authenticator TOTP.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT totp_secret FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    secret = row["totp_secret"] if row and "totp_secret" in row.keys() and row["totp_secret"] else None
+    if not secret:
+        secret = pyotp.random_base32()
+        cursor.execute("UPDATE users SET totp_secret = ? WHERE id = ?", (secret, user_id))
+        conn.commit()
+    conn.close()
+    return secret
+
+def generate_totp_qr_data_url(email: str, secret: str) -> str:
+    """
+    Generates a high-contrast base64 Data URL PNG image for the Google Authenticator QR code.
+    """
+    totp = pyotp.TOTP(secret)
+    provisioning_uri = totp.provisioning_uri(
+        name=email,
+        issuer_name="Smart Medication Reminder"
+    )
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,
+        border=3,
+    )
+    qr.add_data(provisioning_uri)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="#0f172a", back_color="#ffffff")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
 
 # ── User Timezone Helper ───────────────────────────────────────────
 
@@ -832,7 +876,7 @@ def process_dose_action(dose_id: int, user_id: int, action: str, notes: str = No
             cursor.execute("""
                 UPDATE dose_instances
                 SET status = 'taken', action_time = ?, notes = ?
-                WHERE id = ? AND status IN ('pending', 'snoozed')
+                WHERE id = ? AND status IN ('pending', 'snoozed', 'missed')
             """, (action_iso, notes or "Confirmed taken", dose_id))
 
             if cursor.rowcount == 0:
@@ -1023,8 +1067,20 @@ def auth_register():
 
     dispatch_otp(email, phone, otp_code)
 
+    secret = get_or_create_totp_secret(user_id, email)
+    qr_b64 = generate_totp_qr_data_url(email, secret)
+
+    resp_data = {
+        "email": email,
+        "requires_otp": True,
+        "totp_secret": secret,
+        "totp_qr": qr_b64
+    }
+    if DEMO_MODE:
+        resp_data["demo_otp"] = otp_code
+
     return api_success(
-        data={"email": email, "requires_otp": True},
+        data=resp_data,
         message="Registration initiated. A 6-digit verification code has been dispatched.",
         status_code=201
     )
@@ -1080,9 +1136,286 @@ def auth_login():
 
     dispatch_otp(user_dict["email"], user_dict["phone"], otp_code)
 
+    secret = get_or_create_totp_secret(user_dict["id"], user_dict["email"])
+    qr_b64 = generate_totp_qr_data_url(user_dict["email"], secret)
+
+    resp_data = {
+        "email": user_dict["email"],
+        "requires_otp": True,
+        "totp_secret": secret,
+        "totp_qr": qr_b64
+    }
+    if DEMO_MODE:
+        resp_data["demo_otp"] = otp_code
+
     return api_success(
-        data={"email": user_dict["email"], "requires_otp": True},
+        data=resp_data,
         message="Login verification code dispatched to your registered email."
+    )
+
+@app.route("/api/auth/demo-login", methods=["POST"])
+def auth_demo_login():
+    """
+    1-Click demonstration login for Parul University presentation.
+    Only available when DEMO_MODE=true.
+    Supports roles: patient (Himanshu Patel), caregiver (Divyadarshan Chauhan), clinician (Prof. Sathwik Chebrolu).
+    """
+    if not DEMO_MODE:
+        return api_error("Demo login is disabled in production mode", status_code=403, code="FORBIDDEN")
+
+    body = request.get_json(silent=True) or {}
+    role = (body.get("role") or "patient").strip().lower()
+    email_map = {
+        "patient": "himanshu@paruluniversity.ac.in",
+        "caregiver": "divyadarshan@paruluniversity.ac.in",
+        "clinician": "sathwik.chebrolu@paruluniversity.ac.in"
+    }
+    target_email = body.get("email") or email_map.get(role, "himanshu@paruluniversity.ac.in")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, email, phone, role, timezone FROM users WHERE LOWER(email) = ?", (target_email.lower(),))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return api_error(f"Demo user '{target_email}' not found. Please initialize and seed the database.", status_code=404, code="NOT_FOUND")
+
+    user_dict = dict(user)
+
+    raw_token = secrets.token_urlsafe(32)
+    token_h = hashlib.sha256(raw_token.encode()).hexdigest()
+    session_expiry = (get_current_time() + timedelta(days=7)).isoformat()
+
+    cursor.execute("""
+        INSERT INTO sessions (user_id, token_hash, role, expires_at)
+        VALUES (?, ?, ?, ?)
+    """, (user_dict["id"], token_h, user_dict["role"], session_expiry))
+
+    conn.commit()
+    conn.close()
+
+    return api_success(
+        data={"user": user_dict, "token": raw_token},
+        message=f"Demo login successful as {user_dict['name']} ({user_dict['role']})."
+    )
+
+@app.route("/api/auth/direct-login", methods=["POST"])
+def auth_direct_login():
+    """
+    Direct credentials login without requiring an external SMTP OTP provider.
+    Verifies PBKDF2 password and issues a signed session token.
+    """
+    body = request.get_json(silent=True) or {}
+    identifier = (body.get("identifier") or body.get("email") or "").strip().lower()
+    password = body.get("password", "")
+
+    if not identifier:
+        return api_error("Email or phone is required", status_code=422, code="VALIDATION_ERROR")
+    if not password and not DEMO_MODE:
+        return api_error("Password is required", status_code=422, code="VALIDATION_ERROR")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE LOWER(email) = ? OR phone = ? OR LOWER(name) = ?", (identifier, identifier, identifier))
+    user = cursor.fetchone()
+
+    if not user:
+        conn.close()
+        return api_error("Account not found. Please check your credentials or create an account.", status_code=404, code="NOT_FOUND")
+
+    user_dict = dict(user)
+    if password and not verify_password(password, user_dict["password_hash"]):
+        conn.close()
+        return api_error("Invalid email or password", status_code=401, code="UNAUTHORIZED")
+
+    # Issue signed session token
+    raw_token = secrets.token_urlsafe(32)
+    token_h = hashlib.sha256(raw_token.encode()).hexdigest()
+    session_expiry = (get_current_time() + timedelta(days=7)).isoformat()
+
+    cursor.execute("""
+        INSERT INTO sessions (user_id, token_hash, role, expires_at)
+        VALUES (?, ?, ?, ?)
+    """, (user_dict["id"], token_h, user_dict["role"], session_expiry))
+
+    conn.commit()
+    conn.close()
+
+    # Clean user dict for client
+    user_dict.pop("password_hash", None)
+
+    return api_success(
+        data={"user": user_dict, "token": raw_token},
+        message=f"Welcome back, {user_dict['name']}!"
+    )
+
+@app.route("/api/auth/direct-register", methods=["POST"])
+def auth_direct_register():
+    """
+    Direct registration without requiring an external SMTP OTP provider.
+    Creates account and immediately signs the user in.
+    """
+    body = request.get_json(silent=True) or {}
+    name = (body.get("fullName") or body.get("name") or "").strip()
+    email = (body.get("email") or "").strip().lower()
+    phone = (body.get("phone") or "").strip()
+    role = (body.get("role") or "patient").strip().lower()
+    password = body.get("password", "")
+    user_tz = (body.get("timezone") or "Asia/Kolkata").strip()
+
+    if not name:
+        return api_error("Full name is required", status_code=422, code="VALIDATION_ERROR")
+    if not email or "@" not in email:
+        return api_error("A valid email address is required", status_code=422, code="VALIDATION_ERROR")
+    if not phone:
+        return api_error("Phone number is required", status_code=422, code="VALIDATION_ERROR")
+    if role not in ("patient", "caregiver", "clinician"):
+        return api_error("Role must be 'patient', 'caregiver', or 'clinician'", status_code=422, code="VALIDATION_ERROR")
+    if not password or len(password) < 6:
+        return api_error("Password must be at least 6 characters", status_code=422, code="VALIDATION_ERROR")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id FROM users WHERE LOWER(email) = ?", (email,))
+    existing = cursor.fetchone()
+    if existing:
+        conn.close()
+        return api_error("An account with this email already exists. Please log in.", status_code=409, code="CONFLICT")
+
+    password_hash = hash_password(password)
+    cursor.execute(
+        "INSERT INTO users (name, email, phone, role, password_hash, timezone) VALUES (?, ?, ?, ?, ?, ?)",
+        (name, email, phone, role, password_hash, user_tz)
+    )
+    user_id = cursor.lastrowid
+
+    # If caregiver or clinician, optionally link default demo patient in demo mode
+    if DEMO_MODE and role in ("caregiver", "clinician"):
+        cursor.execute("SELECT id FROM users WHERE role = 'patient' LIMIT 1")
+        demo_p = cursor.fetchone()
+        if demo_p and demo_p["id"] != user_id:
+            cursor.execute("""
+                INSERT OR IGNORE INTO caregiver_patient (caregiver_id, patient_id, access_level, status)
+                VALUES (?, ?, 'Full Clinical Access', 'Active')
+            """, (user_id, demo_p["id"]))
+
+    # Issue signed session token
+    raw_token = secrets.token_urlsafe(32)
+    token_h = hashlib.sha256(raw_token.encode()).hexdigest()
+    session_expiry = (get_current_time() + timedelta(days=7)).isoformat()
+
+    cursor.execute("""
+        INSERT INTO sessions (user_id, token_hash, role, expires_at)
+        VALUES (?, ?, ?, ?)
+    """, (user_id, token_h, role, session_expiry))
+
+    conn.commit()
+    conn.close()
+
+    user_dict = {
+        "id": user_id,
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "role": role,
+        "timezone": user_tz
+    }
+
+    return api_success(
+        data={"user": user_dict, "token": raw_token},
+        message=f"Account created successfully. Welcome, {name}!",
+        status_code=201
+    )
+
+@app.route("/api/auth/switch-role", methods=["POST"])
+@require_auth
+def auth_switch_role():
+    """
+    Switch current active session role dynamically for demonstration / multi-role navigation.
+    """
+    body = request.get_json(silent=True) or {}
+    new_role = (body.get("role") or "").strip().lower()
+    if new_role not in ("patient", "caregiver", "clinician"):
+        return api_error("Role must be 'patient', 'caregiver', or 'clinician'", status_code=422, code="VALIDATION_ERROR")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE sessions SET role = ? WHERE token_hash = ?", (new_role, g.current_user["token_hash"]))
+    cursor.execute("UPDATE users SET role = ? WHERE id = ?", (new_role, g.current_user["id"]))
+
+    # If switching to caregiver/clinician, ensure linked demo patient exists in demo mode
+    if DEMO_MODE and new_role in ("caregiver", "clinician"):
+        cursor.execute("SELECT id FROM users WHERE role = 'patient' AND id != ? LIMIT 1", (g.current_user["id"],))
+        demo_p = cursor.fetchone()
+        if demo_p:
+            cursor.execute("""
+                INSERT OR IGNORE INTO caregiver_patient (caregiver_id, patient_id, access_level, status)
+                VALUES (?, ?, 'Full Clinical Access', 'Active')
+            """, (g.current_user["id"], demo_p["id"]))
+
+    cursor.execute("SELECT id, name, email, phone, role, timezone FROM users WHERE id = ?", (g.current_user["id"],))
+    updated_user = dict(cursor.fetchone())
+    conn.commit()
+    conn.close()
+
+    g.current_user["role"] = new_role
+
+    return api_success(
+        data={"user": updated_user},
+        message=f"Switched role to {new_role} successfully."
+    )
+
+@app.route("/api/auth/skip-otp", methods=["POST"])
+def auth_skip_otp():
+    """
+    Instantly verifies the latest pending OTP for demonstration mode.
+    """
+    if not DEMO_MODE:
+        return api_error("Skip OTP is only available in demonstration mode", status_code=403, code="FORBIDDEN")
+
+    body = request.get_json(silent=True) or {}
+    email = (body.get("email") or "").strip().lower()
+    if not email:
+        return api_error("Email is required", status_code=422, code="VALIDATION_ERROR")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM otp_codes
+        WHERE email = ? AND used = 0
+        ORDER BY id DESC LIMIT 1
+    """, (email,))
+    otp_record = cursor.fetchone()
+
+    if not otp_record:
+        # Fallback to user by email directly
+        cursor.execute("SELECT id, name, email, phone, role, timezone FROM users WHERE LOWER(email) = ?", (email,))
+        user = cursor.fetchone()
+        if not user:
+            conn.close()
+            return api_error("No user found with this email", status_code=404, code="NOT_FOUND")
+        user_dict = dict(user)
+    else:
+        cursor.execute("UPDATE otp_codes SET used = 1 WHERE id = ?", (otp_record["id"],))
+        cursor.execute("SELECT id, name, email, phone, role, timezone FROM users WHERE id = ?", (otp_record["user_id"],))
+        user_dict = dict(cursor.fetchone())
+
+    raw_token = secrets.token_urlsafe(32)
+    token_h = hashlib.sha256(raw_token.encode()).hexdigest()
+    session_expiry = (get_current_time() + timedelta(days=7)).isoformat()
+
+    cursor.execute("""
+        INSERT INTO sessions (user_id, token_hash, role, expires_at)
+        VALUES (?, ?, ?, ?)
+    """, (user_dict["id"], token_h, user_dict["role"], session_expiry))
+
+    conn.commit()
+    conn.close()
+
+    return api_success(
+        data={"user": user_dict, "token": raw_token},
+        message="Instant verification complete. Session issued."
     )
 
 @app.route("/api/auth/verify-otp", methods=["POST"])
@@ -1109,42 +1442,69 @@ def auth_verify_otp():
     """, (email,))
     otp_record = cursor.fetchone()
 
-    if not otp_record:
-        conn.close()
-        return api_error("No pending OTP request found. Please request a new code.", status_code=400, code="INVALID_OTP")
-
-    if otp_record["attempts"] >= otp_record["max_attempts"]:
-        conn.close()
-        return api_error("Too many failed attempts. This OTP has been locked. Please request a new code.", status_code=429, code="TOO_MANY_ATTEMPTS")
-
-    now_iso = get_current_time().isoformat()
-    if otp_record["expires_at"] < now_iso:
-        conn.close()
-        return api_error("This verification code has expired. Please request a new code.", status_code=400, code="OTP_EXPIRED")
-
-    # Verify HMAC-SHA256 with stored salt using hmac.compare_digest
-    stored_salt = otp_record["salt"] if "salt" in otp_record.keys() else ""
-    if not verify_otp_hash(otp_code, stored_salt, otp_record["otp_hash"]):
-        cursor.execute("UPDATE otp_codes SET attempts = attempts + 1 WHERE id = ?", (otp_record["id"],))
-        conn.commit()
-        remaining = otp_record["max_attempts"] - (otp_record["attempts"] + 1)
-        conn.close()
-        return api_error(
-            f"Incorrect verification code. {remaining} attempt{'s' if remaining != 1 else ''} remaining.",
-            status_code=400,
-            code="INVALID_OTP"
-        )
-
-    # Valid: single-use enforcement
-    cursor.execute("UPDATE otp_codes SET used = 1 WHERE id = ?", (otp_record["id"],))
-
-    cursor.execute("SELECT id, name, email, phone, role, timezone FROM users WHERE id = ?", (otp_record["user_id"],))
+    cursor.execute("SELECT id, name, email, phone, role, timezone, totp_secret FROM users WHERE LOWER(email) = ?", (email,))
     user = cursor.fetchone()
-    if not user:
-        conn.close()
-        return api_error("User account not found", status_code=404, code="NOT_FOUND")
 
-    user_dict = dict(user)
+    # 1. Check if user exists and code matches Google Authenticator TOTP
+    totp_valid = False
+    if user and "totp_secret" in user.keys() and user["totp_secret"]:
+        try:
+            totp = pyotp.TOTP(user["totp_secret"])
+            if totp.verify(otp_code, valid_window=1):
+                totp_valid = True
+        except Exception as e:
+            logger.warning(f"TOTP verification warning: {e}")
+
+    if not totp_valid:
+        if not otp_record:
+            conn.close()
+            return api_error("No pending OTP request found. Please request a new code.", status_code=400, code="INVALID_OTP")
+
+        if otp_record["attempts"] >= otp_record["max_attempts"]:
+            conn.close()
+            return api_error("Too many failed attempts. This OTP has been locked. Please request a new code.", status_code=429, code="TOO_MANY_ATTEMPTS")
+
+        now_iso = get_current_time().isoformat()
+        if otp_record["expires_at"] < now_iso:
+            conn.close()
+            return api_error("This verification code has expired. Please request a new code.", status_code=400, code="OTP_EXPIRED")
+
+        # Verify HMAC-SHA256 with stored salt using hmac.compare_digest
+        stored_salt = otp_record["salt"] if "salt" in otp_record.keys() else ""
+        if not verify_otp_hash(otp_code, stored_salt, otp_record["otp_hash"]):
+            cursor.execute("UPDATE otp_codes SET attempts = attempts + 1 WHERE id = ?", (otp_record["id"],))
+            conn.commit()
+            remaining = otp_record["max_attempts"] - (otp_record["attempts"] + 1)
+            conn.close()
+            return api_error(
+                f"Incorrect verification code. {remaining} attempt{'s' if remaining != 1 else ''} remaining.",
+                status_code=400,
+                code="INVALID_OTP"
+            )
+
+        # Valid via single-use email/sms OTP: mark used
+        cursor.execute("UPDATE otp_codes SET used = 1 WHERE id = ?", (otp_record["id"],))
+    else:
+        # Valid via TOTP: mark any pending single-use OTPs as used
+        if otp_record:
+            cursor.execute("UPDATE otp_codes SET used = 1 WHERE id = ?", (otp_record["id"],))
+
+    if not user:
+        if otp_record:
+            cursor.execute("SELECT id, name, email, phone, role, timezone FROM users WHERE id = ?", (otp_record["user_id"],))
+            user = cursor.fetchone()
+        if not user:
+            conn.close()
+            return api_error("User account not found", status_code=404, code="NOT_FOUND")
+
+    user_dict = {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "phone": user["phone"],
+        "role": user["role"],
+        "timezone": user["timezone"] if "timezone" in user.keys() and user["timezone"] else "UTC"
+    }
 
     # Issue signed session token
     raw_token = secrets.token_urlsafe(32)
@@ -1162,6 +1522,56 @@ def auth_verify_otp():
     return api_success(
         data={"user": user_dict, "token": raw_token},
         message="Verification successful. Session issued."
+    )
+
+@app.route("/api/auth/totp/setup", methods=["GET", "POST"])
+def auth_totp_setup():
+    email = (request.args.get("email") or "").strip().lower()
+    if not email and request.is_json:
+        email = (request.get_json(silent=True) or {}).get("email", "").strip().lower()
+
+    if not email:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            raw_token = auth_header.split(" ", 1)[1].strip()
+            token_h = hashlib.sha256(raw_token.encode()).hexdigest()
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT u.email FROM sessions s
+                JOIN users u ON s.user_id = u.id
+                WHERE s.token_hash = ?
+            """, (token_h,))
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                email = row["email"]
+
+    if not email:
+        return api_error("Email is required for Authenticator setup", status_code=422, code="VALIDATION_ERROR")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, email, totp_secret FROM users WHERE LOWER(email) = ?", (email,))
+    user = cursor.fetchone()
+    if not user:
+        conn.close()
+        return api_error("User not found", status_code=404, code="NOT_FOUND")
+
+    user_dict = dict(user)
+    conn.close()
+
+    secret = get_or_create_totp_secret(user_dict["id"], user_dict["email"])
+    qr_b64 = generate_totp_qr_data_url(user_dict["email"], secret)
+
+    return api_success(
+        data={
+            "email": user_dict["email"],
+            "totp_secret": secret,
+            "totp_qr": qr_b64,
+            "instructions": "Scan this QR code with Google Authenticator or Microsoft Authenticator, then enter the 6-digit code."
+        },
+        message="TOTP QR code generated."
     )
 
 @app.route("/api/auth/resend-otp", methods=["POST"])
@@ -1225,7 +1635,21 @@ def auth_resend_otp():
 
     dispatch_otp(email, user["phone"], new_code)
 
-    return api_success(message="A new verification code has been dispatched to your email.")
+    secret = get_or_create_totp_secret(user["id"], email)
+    qr_b64 = generate_totp_qr_data_url(email, secret)
+
+    resp_data = {
+        "email": email,
+        "totp_secret": secret,
+        "totp_qr": qr_b64
+    }
+    if DEMO_MODE:
+        resp_data["demo_otp"] = new_code
+
+    return api_success(
+        data=resp_data,
+        message="A new verification code has been dispatched to your email."
+    )
 
 @app.route("/api/auth/logout", methods=["POST"])
 @require_auth
@@ -1689,6 +2113,19 @@ def caregiver_patients():
         WHERE caregiver_id = ? AND status = 'Active'
     """, (caregiver_id,))
     linked_ids = [r[0] for r in cursor.fetchall()]
+
+    user_email = (g.current_user.get("email") or "").lower()
+    if DEMO_MODE and not linked_ids and (caregiver_id == 2 or "divyadarshan" in user_email or request.args.get("demo") == "true"):
+        cursor.execute("SELECT id FROM users WHERE role = 'patient' LIMIT 1")
+        demo_p = cursor.fetchone()
+        if demo_p and demo_p["id"] != caregiver_id:
+            cursor.execute("""
+                INSERT OR IGNORE INTO caregiver_patient (caregiver_id, patient_id, access_level, status)
+                VALUES (?, ?, 'Full Access & Emergency Escalation', 'Active')
+            """, (caregiver_id, demo_p["id"]))
+            conn.commit()
+            linked_ids = [demo_p["id"]]
+
     for pid in linked_ids:
         evaluate_overdue_doses(pid, conn=conn)
 
@@ -1772,6 +2209,19 @@ def clinician_patients():
         WHERE caregiver_id = ? AND status = 'Active'
     """, (clinician_id,))
     linked_ids = [r[0] for r in cursor.fetchall()]
+
+    user_email = (g.current_user.get("email") or "").lower()
+    if DEMO_MODE and not linked_ids and (clinician_id == 3 or "sathwik" in user_email or request.args.get("demo") == "true"):
+        cursor.execute("SELECT id FROM users WHERE role = 'patient' LIMIT 1")
+        demo_p = cursor.fetchone()
+        if demo_p and demo_p["id"] != clinician_id:
+            cursor.execute("""
+                INSERT OR IGNORE INTO caregiver_patient (caregiver_id, patient_id, access_level, status)
+                VALUES (?, ?, 'Full Clinical Access', 'Active')
+            """, (clinician_id, demo_p["id"]))
+            conn.commit()
+            linked_ids = [demo_p["id"]]
+
     for pid in linked_ids:
         evaluate_overdue_doses(pid, conn=conn)
 

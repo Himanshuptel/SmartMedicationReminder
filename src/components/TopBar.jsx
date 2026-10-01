@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   SunIcon, MoonIcon, ShieldIcon, UsersIcon, StethoscopeIcon,
   BellIcon, AlertTriangleIcon, DiagramIcon, CheckIcon, PillIcon
@@ -18,11 +18,73 @@ export default function TopBar({
   onOpenAuth,
   onSwitchToDemo,
   onLogout,
-  isDemo
+  isDemo,
+  isAuthenticated
 }) {
   const [showNotifs, setShowNotifs] = useState(false);
+  const notifRef = useRef(null);
 
   const unreadCount = notifications.filter(n => n.status === 'unread').length;
+
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (notifRef.current && !notifRef.current.contains(event.target)) {
+        setShowNotifs(false);
+      }
+    }
+    if (showNotifs) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showNotifs]);
+
+  const isAuthScreen = currentScreen === 'auth' || currentScreen === 'otp' || !isAuthenticated;
+
+  if (isAuthScreen) {
+    return (
+      <header className="top-bar auth-top-bar" role="banner">
+        <div className="top-bar__left">
+          <div className="top-bar__logo" aria-label="MedRemind home">
+            <img
+              src={`${import.meta.env.BASE_URL}logo.png`}
+              alt="MedRemind"
+              width={30}
+              height={30}
+              style={{ borderRadius: 8 }}
+              onError={(e) => {
+                e.target.style.display = 'none';
+              }}
+            />
+            <span className="logo-text">MedRemind</span>
+          </div>
+          <span className="auth-brand-tag">Clinical Portal</span>
+        </div>
+
+        <div className="top-bar__right">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={onOpenSystemDesign}
+            title="View system design & architecture specifications"
+          >
+            <DiagramIcon size={14} />
+            <span>Architecture & Specs</span>
+          </button>
+
+          <button
+            className="icon-btn"
+            onClick={onToggleDark}
+            aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {darkMode ? <SunIcon size={18} /> : <MoonIcon size={18} />}
+          </button>
+        </div>
+      </header>
+    );
+  }
 
   return (
     <header className="top-bar" role="banner">
@@ -41,49 +103,62 @@ export default function TopBar({
           <span className="logo-text">MedRemind</span>
         </a>
 
-        {/* Role Switcher Pill Bar for Faculty / Demonstration */}
-        <div className="role-switcher" role="group" aria-label="User role selection">
-          <button
-            type="button"
-            className={`role-btn ${currentRole === 'patient' ? 'active' : ''}`}
-            onClick={() => onRoleChange('patient')}
-            title="Switch to Patient View"
-          >
-            <ShieldIcon size={14} />
-            <span>Patient</span>
-          </button>
-          <button
-            type="button"
-            className={`role-btn ${currentRole === 'caregiver' ? 'active' : ''}`}
-            onClick={() => onRoleChange('caregiver')}
-            title="Switch to Caregiver Portal"
-          >
-            <UsersIcon size={14} />
-            <span>Caregiver</span>
-          </button>
-          <button
-            type="button"
-            className={`role-btn ${currentRole === 'clinician' ? 'active' : ''}`}
-            onClick={() => onRoleChange('clinician')}
-            title="Switch to Clinician Portal"
-          >
-            <StethoscopeIcon size={14} />
-            <span>Clinician</span>
-          </button>
-        </div>
+        {/* If Faculty Demo Mode: show role switcher with label. Otherwise, show strictly locked role badge! */}
+        {isDemo ? (
+          <div className="role-switcher" role="group" aria-label="Faculty demo role switcher">
+            <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--color-primary)', fontWeight: 700, padding: '0 4px' }}>
+              Demo:
+            </span>
+            <button
+              type="button"
+              className={`role-btn ${currentRole === 'patient' ? 'active' : ''}`}
+              onClick={() => onRoleChange('patient')}
+              title="Switch to Patient View"
+            >
+              <ShieldIcon size={14} />
+              <span>Patient</span>
+            </button>
+            <button
+              type="button"
+              className={`role-btn ${currentRole === 'caregiver' ? 'active' : ''}`}
+              onClick={() => onRoleChange('caregiver')}
+              title="Switch to Caregiver Portal"
+            >
+              <UsersIcon size={14} />
+              <span>Caregiver</span>
+            </button>
+            <button
+              type="button"
+              className={`role-btn ${currentRole === 'clinician' ? 'active' : ''}`}
+              onClick={() => onRoleChange('clinician')}
+              title="Switch to Clinician Portal"
+            >
+              <StethoscopeIcon size={14} />
+              <span>Clinician</span>
+            </button>
+          </div>
+        ) : (
+          <div className="role-locked-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 'var(--radius-full)', background: 'var(--color-surface-2)', border: '1px solid var(--color-border)', fontSize: '0.75rem', fontWeight: 600 }}>
+            {currentRole === 'clinician' && <><StethoscopeIcon size={14} color="var(--color-primary)" /><span>Clinician Workstation</span></>}
+            {currentRole === 'caregiver' && <><UsersIcon size={14} color="var(--color-accent)" /><span>Caregiver Station</span></>}
+            {currentRole === 'patient' && <><ShieldIcon size={14} color="var(--color-primary)" /><span>Patient Portal</span></>}
+          </div>
+        )}
       </div>
 
       <div className="top-bar__actions">
-        {/* Test Alarm Simulator Button */}
-        <button
-          type="button"
-          className="btn btn-outline-primary btn-sm test-alarm-btn"
-          onClick={onTriggerTestAlarm}
-          title="Simulate live reminder chime and ringing alarm"
-        >
-          <BellIcon size={14} />
-          <span>Test Alarm</span>
-        </button>
+        {/* Test Alarm Simulator Button (Patient Only) */}
+        {currentRole === 'patient' && (
+          <button
+            type="button"
+            className="btn btn-outline-primary btn-sm test-alarm-btn"
+            onClick={onTriggerTestAlarm}
+            title="Simulate live reminder chime and ringing alarm"
+          >
+            <BellIcon size={14} />
+            <span>Test Alarm</span>
+          </button>
+        )}
 
         {/* System Design Architecture Button */}
         <button
@@ -107,13 +182,15 @@ export default function TopBar({
           <span>SOS</span>
         </button>
 
-        {/* Notifications Dropdown */}
-        <div className="notif-wrapper" style={{ position: 'relative' }}>
+        {/* Notifications Dropdown with Outside-Click Handler */}
+        <div className="notif-wrapper" ref={notifRef}>
           <button
             type="button"
-            className="icon-btn notif-btn"
+            className={`icon-btn notif-btn ${showNotifs ? 'active' : ''}`}
             onClick={() => setShowNotifs(s => !s)}
             aria-label="View notifications"
+            aria-expanded={showNotifs}
+            title={unreadCount > 0 ? `${unreadCount} unread notifications` : 'View notifications'}
           >
             <BellIcon size={18} />
             {unreadCount > 0 && <span className="notif-badge">{unreadCount}</span>}

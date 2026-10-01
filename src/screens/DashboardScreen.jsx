@@ -9,6 +9,31 @@ import AddMedicineModal from '../components/AddMedicineModal';
 import { api, getUserDisplayName, getUserKey, isDemoUser } from '../services/api';
 import { playSuccessChime } from '../services/sound';
 
+function formatAuditTime(raw) {
+  if (!raw) return '—';
+  const trimmed = String(raw).trim();
+  if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+    const [h, m] = trimmed.split(':');
+    const hour = parseInt(h, 10);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const displayHour = hour % 12 || 12;
+    return `${displayHour}:${m} ${ampm}`;
+  }
+  try {
+    const d = new Date(trimmed);
+    if (isNaN(d.getTime())) return trimmed;
+    return d.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch {
+    return trimmed;
+  }
+}
+
 export default function DashboardScreen({
   authData,
   currentRole,
@@ -113,12 +138,13 @@ export default function DashboardScreen({
 
   useEffect(() => {
     loadData();
-  }, [loadData]);
+  }, [loadData, authData?.token, currentRole]);
 
   // Sync tab when TopBar role changes
   useEffect(() => {
     if (currentRole === 'caregiver') setActiveTab('caregiver');
     else if (currentRole === 'clinician') setActiveTab('clinician');
+    else if (currentRole === 'patient') setActiveTab('schedule');
   }, [currentRole]);
 
   // Phase 3 & 4: Concrete Dose Instance Actions
@@ -349,19 +375,33 @@ export default function DashboardScreen({
             Welcome back, {userName}
           </h1>
           <p className="dashboard-sub">
-            Your daily adherence score is <strong>{historyData.stats?.adherence_rate || (isDemo ? 88 : 100)}%</strong> with an active <strong>{historyData.stats?.streak_days || (isDemo ? 6 : 0)}-day streak</strong>.
+            {currentRole === 'caregiver' ? (
+              <>
+                Monitoring <strong>{caregiverData.patients.length} linked patient{caregiverData.patients.length === 1 ? '' : 's'}</strong> with active adherence oversight.
+              </>
+            ) : currentRole === 'clinician' ? (
+              <>
+                Attending clinician overseeing <strong>{clinicianData.patients.length} active patient regimen{clinicianData.patients.length === 1 ? '' : 's'}</strong>.
+              </>
+            ) : (
+              <>
+                Your daily adherence score is <strong>{historyData.stats?.adherence_rate || (isDemo ? 88 : 100)}%</strong> with an active <strong>{historyData.stats?.streak_days || (isDemo ? 6 : 0)}-day streak</strong>.
+              </>
+            )}
           </p>
         </div>
 
         <div className="dashboard-header-actions">
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => setShowAddMed(true)}
-          >
-            <PlusIcon size={16} />
-            <span>Add Medicine</span>
-          </button>
+          {currentRole === 'patient' && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setShowAddMed(true)}
+            >
+              <PlusIcon size={16} />
+              <span>Add Medicine</span>
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-outline-danger"
@@ -374,63 +414,79 @@ export default function DashboardScreen({
       </div>
 
       {/* Navigation Tabs */}
+      {/* Role-Gated Navigation Tabs */}
       <nav className="dashboard-nav-tabs" role="tablist" aria-label="Portal Navigation">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'schedule'}
-          className={`tab-btn ${activeTab === 'schedule' ? 'active' : ''}`}
-          onClick={() => setActiveTab('schedule')}
-        >
-          <ClockIcon size={16} />
-          <span>Today's Schedule</span>
-        </button>
+        {currentRole === 'patient' && (
+          <>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'schedule'}
+              className={`tab-btn ${activeTab === 'schedule' ? 'active' : ''}`}
+              onClick={() => setActiveTab('schedule')}
+            >
+              <ClockIcon size={16} />
+              <span>Today's Schedule</span>
+            </button>
 
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'medicines'}
-          className={`tab-btn ${activeTab === 'medicines' ? 'active' : ''}`}
-          onClick={() => setActiveTab('medicines')}
-        >
-          <PillIcon size={16} />
-          <span>Medicine Catalog</span>
-          <span className="tab-counter">{medicines.length}</span>
-        </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'medicines'}
+              className={`tab-btn ${activeTab === 'medicines' ? 'active' : ''}`}
+              onClick={() => setActiveTab('medicines')}
+            >
+              <PillIcon size={16} />
+              <span>Medicine Catalog</span>
+              <span className="tab-counter">{medicines.length}</span>
+            </button>
 
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'history'}
-          className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
-          onClick={() => setActiveTab('history')}
-        >
-          <BarChart2Icon size={16} />
-          <span>Adherence & History</span>
-        </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'history'}
+              className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+              onClick={() => setActiveTab('history')}
+            >
+              <BarChart2Icon size={16} />
+              <span>Adherence & History</span>
+            </button>
+          </>
+        )}
 
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'caregiver'}
-          className={`tab-btn ${activeTab === 'caregiver' ? 'active' : ''}`}
-          onClick={() => setActiveTab('caregiver')}
-        >
-          <UsersIcon size={16} />
-          <span>Caregiver Portal</span>
-        </button>
+        {currentRole === 'caregiver' && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'caregiver'}
+            className={`tab-btn ${activeTab === 'caregiver' ? 'active' : ''}`}
+            onClick={() => setActiveTab('caregiver')}
+          >
+            <UsersIcon size={16} />
+            <span>Caregiver Monitoring Station</span>
+            {caregiverData.patients.length > 0 && (
+              <span className="tab-counter">{caregiverData.patients.length}</span>
+            )}
+          </button>
+        )}
 
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'clinician'}
-          className={`tab-btn ${activeTab === 'clinician' ? 'active' : ''}`}
-          onClick={() => setActiveTab('clinician')}
-        >
-          <StethoscopeIcon size={16} />
-          <span>Clinician View</span>
-        </button>
+        {currentRole === 'clinician' && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'clinician'}
+            className={`tab-btn ${activeTab === 'clinician' ? 'active' : ''}`}
+            onClick={() => setActiveTab('clinician')}
+          >
+            <StethoscopeIcon size={16} />
+            <span>Clinician Workstation</span>
+            {clinicianData.patients.length > 0 && (
+              <span className="tab-counter">{clinicianData.patients.length}</span>
+            )}
+          </button>
+        )}
 
+        {/* AI & Safety Hub is accessible across roles */}
         <button
           type="button"
           role="tab"
@@ -821,15 +877,19 @@ export default function DashboardScreen({
                   <div className="med-details-list">
                     <div className="med-detail-row">
                       <span className="detail-key">Frequency:</span>
-                      <strong className="detail-val">{med.frequency}</strong>
+                      <strong className="detail-val">
+                        {med.frequency === 'once' ? 'Once daily' : med.frequency === 'twice' ? 'Twice daily' : med.frequency === 'thrice' ? 'Thrice daily' : (med.frequency || 'Daily')}
+                      </strong>
                     </div>
                     <div className="med-detail-row">
                       <span className="detail-key">Intake Timing:</span>
-                      <strong className="detail-val">{med.mealTiming.replace('_', ' ')}</strong>
+                      <strong className="detail-val">
+                        {med.mealTiming ? med.mealTiming.replace(/_/g, ' ') : 'After meal'}
+                      </strong>
                     </div>
                     <div className="med-detail-row">
                       <span className="detail-key">Barcode / QR:</span>
-                      <span className="barcode-badge">{med.barcode}</span>
+                      <span className="barcode-badge">{med.barcode || 'MED-RX-VERIFIED'}</span>
                     </div>
                   </div>
 
@@ -971,8 +1031,16 @@ export default function DashboardScreen({
                             {h.status.toUpperCase()}
                           </span>
                         </td>
-                        <td>{h.scheduled_time}</td>
-                        <td>{h.action_time}</td>
+                        <td>
+                          <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.82rem' }}>
+                            {formatAuditTime(h.scheduled_time)}
+                          </span>
+                        </td>
+                        <td>
+                          <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: '0.82rem' }}>
+                            {formatAuditTime(h.action_time)}
+                          </span>
+                        </td>
                         <td style={{ color: 'var(--color-text-2)', fontSize: '0.85rem' }}>{h.notes || '—'}</td>
                       </tr>
                     ))
@@ -1099,14 +1167,16 @@ export default function DashboardScreen({
                       </div>
 
                       {pat.medicines && pat.medicines.length > 0 && (
-                        <div style={{ marginTop: 12 }}>
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-3)', textTransform: 'uppercase' }}>
-                            Prescribed Medications:
+                        <div style={{ marginTop: 14 }}>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--color-text-3)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 8 }}>
+                            Prescribed Medications ({pat.medicines.length}):
                           </span>
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                             {pat.medicines.map((m) => (
-                              <span key={m.id} className="dosage-pill" style={{ fontSize: '0.75rem' }}>
-                                {m.name} ({m.dosage_amount} {m.dosage_unit})
+                              <span key={m.id} className="dosage-pill">
+                                <PillIcon size={12} color="var(--color-primary)" />
+                                <strong>{m.name}</strong>
+                                <span>({m.dosage_amount || m.dosageAmount} {m.dosage_unit || m.dosageUnit})</span>
                               </span>
                             ))}
                           </div>
@@ -1353,7 +1423,7 @@ export default function DashboardScreen({
                         <div className="form-group">
                           <label className="form-label">Clinical Observations</label>
                           <textarea
-                            className="form-input"
+                            className="form-input form-textarea"
                             rows={3}
                             placeholder={`Enter clinical assessment or adherence remarks for ${currentPatient.name}...`}
                             value={newNote}
@@ -1580,6 +1650,14 @@ export default function DashboardScreen({
           onSave={handleAddMedicine}
         />
       )}
+      {/* Hospital-Grade Academic & Institutional Credits Footer */}
+      <footer className="dashboard-footer">
+        <div className="footer-content">
+          <span>MedRemind Clinical Regimen Adherence System</span>
+          <span className="footer-dot">•</span>
+          <span>Parul University (Guided by Prof. Sathwik Chebrolu)</span>
+        </div>
+      </footer>
     </div>
   );
 }

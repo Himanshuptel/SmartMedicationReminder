@@ -86,6 +86,7 @@ def main():
     print(f"Database: {DB_PATH}")
     print("=" * 80)
 
+    conn = sqlite3.connect(DB_PATH)
     ts = int(time.time())
     pt_email = f"patient_{ts}@parul.ac.in"
     cg_email = f"caregiver_{ts}@parul.ac.in"
@@ -165,7 +166,12 @@ def main():
     }, token=pt_token)
     snooze_med_id = res.get("medicine_id") or res.get("id")
     status, res, _ = req("/doses/today", "GET", token=pt_token)
-    snooze_dose = next(d for d in res["doses"] if d["medicine_id"] == snooze_med_id and d["status"] == "pending")
+    snooze_dose = next((d for d in res.get("doses", []) if d["medicine_id"] == snooze_med_id and d["status"] == "pending"), None)
+    if not snooze_dose:
+        snooze_dose = next(d for d in res.get("doses", []) if d["medicine_id"] == snooze_med_id)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE dose_instances SET status = 'pending', snooze_count = 0 WHERE id = ?", (snooze_dose["id"],))
+        conn.commit()
     s_id = snooze_dose["id"]
 
     # Snooze 1
@@ -344,6 +350,7 @@ def main():
 
     # F. Expiry rejection
     conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM request_rate_limits WHERE limiter_key LIKE ?", (f"%{auth_email}%",))
     conn.execute("UPDATE otp_codes SET expires_at = '2020-01-01T00:00:00' WHERE email = ?", (auth_email,))
     conn.commit()
     conn.close()

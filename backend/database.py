@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS users (
     role TEXT NOT NULL CHECK(role IN ('patient', 'caregiver', 'clinician')),
     password_hash TEXT NOT NULL,
     timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+    totp_secret TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -350,6 +351,11 @@ def apply_migrations(conn):
         except sqlite3.OperationalError:
             pass
 
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT;")
+        except sqlite3.OperationalError:
+            pass
+
         cursor.executescript(SCHEMA_V2)
         cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (2, 'phase_3_doses_and_invites');")
         conn.commit()
@@ -365,6 +371,15 @@ def apply_migrations(conn):
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_key_time ON request_rate_limits(limiter_key, timestamp);")
         cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (3, 'phase_5_sqlite_rate_limiting');")
+        conn.commit()
+
+    cursor.execute("SELECT version FROM schema_migrations WHERE version = 4")
+    if not cursor.fetchone():
+        try:
+            cursor.execute("ALTER TABLE users ADD COLUMN totp_secret TEXT;")
+        except sqlite3.OperationalError:
+            pass
+        cursor.execute("INSERT INTO schema_migrations (version, name) VALUES (4, 'mfa_totp_secret');")
         conn.commit()
 
 def seed_data(cursor):

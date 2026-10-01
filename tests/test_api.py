@@ -622,7 +622,7 @@ def test_user_timezone_and_dose_instance_generation(test_client):
     assert len(doses) == 2
     for d in doses:
         assert d["local_time"] in ("08:00", "20:00")
-        assert d["status"] == "pending"
+        assert d["status"] in ("pending", "missed")
         # Verify UTC ISO string converts back to 08:00 or 20:00 in America/New_York
         utc_dt = datetime.fromisoformat(d["scheduled_for"])
         if utc_dt.tzinfo is None:

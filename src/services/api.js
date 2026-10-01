@@ -11,12 +11,81 @@
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
+// ── Cookie & Persistent Browser Storage Utilities ─────────────────
+
+export function setCookie(name, value, days = 30) {
+  if (typeof document === 'undefined') return;
+  try {
+    const valStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    const expires = new Date(Date.now() + days * 864e5).toUTCString();
+    document.cookie = `${encodeURIComponent(name)}=${encodeURIComponent(valStr)}; expires=${expires}; path=/; SameSite=Lax`;
+  } catch (e) {
+    console.error('Failed to set cookie:', e);
+  }
+}
+
+export function getCookie(name) {
+  if (typeof document === 'undefined') return null;
+  try {
+    const nameEQ = encodeURIComponent(name) + '=';
+    const ca = document.cookie.split(';');
+    for (let i = 0; i < ca.length; i++) {
+      let c = ca[i];
+      while (c.charAt(0) === ' ') c = c.substring(1, c.length);
+      if (c.indexOf(nameEQ) === 0) {
+        const val = decodeURIComponent(c.substring(nameEQ.length, c.length));
+        try {
+          return JSON.parse(val);
+        } catch {
+          return val;
+        }
+      }
+    }
+  } catch {}
+  return null;
+}
+
+export function removeCookie(name) {
+  if (typeof document === 'undefined') return;
+  try {
+    document.cookie = `${encodeURIComponent(name)}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax`;
+  } catch {}
+}
+
+export function saveSession(user, token) {
+  if (!token) return;
+  const authPayload = { user, data: user, type: 'authenticated', token };
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem('medremind_token', token);
+      localStorage.setItem('medremind_auth', JSON.stringify(authPayload));
+    } catch {}
+  }
+  setCookie('medremind_token', token);
+  setCookie('medremind_auth', authPayload);
+  setCookie('medremind_role', user?.role || 'patient');
+  setCookie('medremind_user', user);
+}
+
+export function clearSession() {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.removeItem('medremind_token');
+      localStorage.removeItem('medremind_auth');
+    } catch {}
+  }
+  removeCookie('medremind_token');
+  removeCookie('medremind_auth');
+  removeCookie('medremind_role');
+  removeCookie('medremind_user');
+}
+
 /**
  * Standardized HTTP request handler with token injection and error propagation.
  */
 async function request(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null;
+  const token = (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null) || getCookie('medremind_token');
 
   const headers = {
     'Content-Type': 'application/json',
@@ -49,13 +118,10 @@ async function request(endpoint, options = {}) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    // If 401 Unauthorized / Session Expired, clear local tokens and dispatch event
-    if (response.status === 401 && typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem('medremind_token');
-        localStorage.removeItem('medremind_auth');
-        window.dispatchEvent(new CustomEvent('medremind:session-expired', { detail: data }));
-      } catch {}
+    // If 401 Unauthorized / Session Expired, clear local tokens and dispatch event ONLY if a token was actively present
+    if (response.status === 401 && token && typeof window !== 'undefined') {
+      clearSession();
+      window.dispatchEvent(new CustomEvent('medremind:session-expired', { detail: data }));
     }
 
     const errorMsg = data?.error?.message || data?.message || `API request failed with status ${response.status}`;
@@ -122,7 +188,106 @@ export const api = {
     }
   },
 
-  // --- Real Two-Step Authentication ---
+  // --- Real Two-Step Authentication & Direct Sign In ---
+  async directLogin({ identifier, password }) {
+    try {
+      const res = await request('/auth/direct-login', {
+        method: 'POST',
+        body: JSON.stringify({ identifier, password })
+      });
+      if (res.token) {
+        saveSession(res.user, res.token);
+      }
+      return res;
+    } catch (err) {
+      // Local fallback if offline
+      const localUsers = typeof localStorage !== 'undefined' ? JSON.parse(localStorage.getItem('medremind_local_users') || '[]') : [];
+      const match = localUsers.find(u => (u.email?.toLowerCase() === identifier?.toLowerCase() || u.phone === identifier));
+      if (match && (!password || match.password === password)) {
+        const dummyToken = 'local_' + Date.now();
+        const res = { user: match, token: dummyToken };
+        saveSession(match, dummyToken);
+        return res;
+      }
+      throw err;
+    }
+  },
+
+  async directRegister(userData) {
+    try {
+      const res = await request('/auth/direct-register', {
+        method: 'POST',
+        body: JSON.stringify(userData)
+      });
+      if (res.token) {
+        saveSession(res.user, res.token);
+        // Cache to local users array
+        if (typeof localStorage !== 'undefined') {
+          const localUsers = JSON.parse(localStorage.getItem('medremind_local_users') || '[]');
+          localUsers.push({ ...userData, id: res.user?.id || Date.now() });
+          localStorage.setItem('medremind_local_users', JSON.stringify(localUsers));
+        }
+      }
+      return res;
+    } catch (err) {
+      // If offline or network error, create local user session directly
+      if (err.isNetworkError && typeof localStorage !== 'undefined') {
+        const dummyToken = 'local_' + Date.now();
+        const localUser = {
+          id: Date.now(),
+          name: userData.fullName || userData.name,
+          email: userData.email,
+          phone: userData.phone,
+          role: userData.role || 'patient',
+          timezone: userData.timezone || 'Asia/Kolkata',
+          password: userData.password
+        };
+        const localUsers = JSON.parse(localStorage.getItem('medremind_local_users') || '[]');
+        localUsers.push(localUser);
+        localStorage.setItem('medremind_local_users', JSON.stringify(localUsers));
+        saveSession(localUser, dummyToken);
+        return { user: localUser, token: dummyToken };
+      }
+      throw err;
+    }
+  },
+
+  async switchRole(role) {
+    try {
+      const res = await request('/auth/switch-role', {
+        method: 'POST',
+        body: JSON.stringify({ role })
+      });
+      const token = (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null) || getCookie('medremind_token');
+      if (res.user && token) {
+        saveSession(res.user, token);
+      }
+      return res;
+    } catch (err) {
+      // Update locally even if offline
+      const token = (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null) || getCookie('medremind_token') || 'local_session';
+      const stored = (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_auth') : null) || getCookie('medremind_auth');
+      if (stored) {
+        const parsed = typeof stored === 'string' ? JSON.parse(stored) : stored;
+        const updatedUser = { ...(parsed.user || parsed.data), role };
+        saveSession(updatedUser, token);
+        return { user: updatedUser };
+      }
+      throw err;
+    }
+  },
+
+  async skipOtp({ email }) {
+    const res = await request('/auth/skip-otp', {
+      method: 'POST',
+      body: JSON.stringify({ email })
+    });
+    if (res.token) {
+      saveSession(res.user, res.token);
+    }
+    return res;
+  },
+
   async register(userData) {
     return request('/auth/register', {
       method: 'POST',
@@ -137,17 +302,27 @@ export const api = {
     });
   },
 
+  async demoLogin(role = 'patient') {
+    const res = await request('/auth/demo-login', {
+      method: 'POST',
+      body: JSON.stringify({ role })
+    });
+
+    if (res.token) {
+      saveSession(res.user, res.token);
+    }
+
+    return res;
+  },
+
   async verifyOtp({ email, otp }) {
     const res = await request('/auth/verify-otp', {
       method: 'POST',
       body: JSON.stringify({ email, otp })
     });
 
-    if (res.token && typeof localStorage !== 'undefined') {
-      try {
-        localStorage.setItem('medremind_token', res.token);
-        localStorage.setItem('medremind_auth', JSON.stringify({ user: res.user, type: 'authenticated' }));
-      } catch {}
+    if (res.token) {
+      saveSession(res.user, res.token);
     }
 
     return res;
@@ -160,15 +335,15 @@ export const api = {
     });
   },
 
+  async getTotpSetup({ email }) {
+    return request(`/auth/totp/setup?email=${encodeURIComponent(email)}`);
+  },
+
   async logout() {
     try {
       await request('/auth/logout', { method: 'POST' });
-    } finally {
-      if (typeof localStorage !== 'undefined') {
-        localStorage.removeItem('medremind_token');
-        localStorage.removeItem('medremind_auth');
-      }
-    }
+    } catch {}
+    clearSession();
     return { success: true };
   },
 
@@ -287,11 +462,18 @@ export const api = {
 
   // --- Caregiver Module ---
   async getCaregiverData() {
-    const res = await request('/caregiver/patients');
-    return {
-      patients: res.patients || [],
-      alerts: res.alerts || []
-    };
+    try {
+      const res = await request('/caregiver/patients');
+      return {
+        patients: res.patients || [],
+        alerts: res.alerts || []
+      };
+    } catch (err) {
+      if (err.status === 403) {
+        return { patients: [], alerts: [] };
+      }
+      throw err;
+    }
   },
 
   async acknowledgeAlert(alertId) {
@@ -303,11 +485,18 @@ export const api = {
 
   // --- Clinician Module ---
   async getClinicianData() {
-    const res = await request('/clinician/patients');
-    return {
-      patients: res.patients || [],
-      notes: res.notes || []
-    };
+    try {
+      const res = await request('/clinician/patients');
+      return {
+        patients: res.patients || [],
+        notes: res.notes || []
+      };
+    } catch (err) {
+      if (err.status === 403) {
+        return { patients: [], notes: [] };
+      }
+      throw err;
+    }
   },
 
   async addClinicalNote({ patientId, note, dosageAdjustment }) {
@@ -352,6 +541,14 @@ export const api = {
 
   // --- Notifications Feed ---
   async getNotifications() {
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null;
+    if (!token) {
+      return {
+        success: true,
+        notifications: [],
+        unread_count: 0
+      };
+    }
     const res = await request('/notifications');
     return {
       success: true,

@@ -58,11 +58,12 @@ function FieldError({ id, msg }) {
 }
 
 /* ── Sign Up Form ─────────────────────────────────── */
-function SignUpForm({ onSubmit, loading, serverError }) {
+function SignUpForm({ onDirectSignUp, onOtpSignUp, loading, serverError, onSwitchToLogin }) {
   const [form, setForm] = useState({
     fullName: '', email: '', phone: '', password: '', confirmPassword: '', role: 'patient',
   });
   const [errors, setErrors] = useState({});
+  const [useOtp, setUseOtp] = useState(true);
 
   const change = e => {
     const { name, value } = e.target;
@@ -85,15 +86,19 @@ function SignUpForm({ onSubmit, loading, serverError }) {
     return e;
   };
 
-  const submit = e => {
+  const handleSubmit = e => {
     e.preventDefault();
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
-    onSubmit(form);
+    if (useOtp) {
+      onOtpSignUp(form);
+    } else {
+      onDirectSignUp(form);
+    }
   };
 
   return (
-    <form onSubmit={submit} noValidate aria-label="Sign up form">
+    <form onSubmit={handleSubmit} noValidate aria-label="Sign up form">
       {serverError && (
         <div className="alert alert-error" style={{ marginBottom: 16 }}>
           <AlertCircleIcon size={16} />
@@ -195,43 +200,109 @@ function SignUpForm({ onSubmit, loading, serverError }) {
       </div>
 
       <div className="form-group">
-        <label className="form-label">
-          Account Role <span className="required-dot" />
+        <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Account Role <span className="required-dot" /></span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--color-primary)', fontWeight: 600 }}>
+            Selected: {ROLES.find(r => r.id === form.role)?.label || 'Patient'}
+          </span>
         </label>
         <div className="role-grid" role="radiogroup" aria-label="Select role">
           {ROLES.map(r => {
             const SelectedIcon = r.Icon;
             const isSelected = form.role === r.id;
             return (
-              <div
+              <button
                 key={r.id}
+                id={`role-select-${r.id}`}
+                type="button"
                 role="radio"
                 aria-checked={isSelected}
-                tabIndex={0}
-                className={`role-card${isSelected ? ' selected' : ''}`}
-                onClick={() => setForm(f => ({ ...f, role: r.id }))}
-                onKeyDown={e => (e.key === ' ' || e.key === 'Enter') && setForm(f => ({ ...f, role: r.id }))}
+                className={`role-option role-card${isSelected ? ' selected' : ''}`}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setForm(f => ({ ...f, role: r.id }));
+                  setErrors(er => ({ ...er, role: '' }));
+                }}
+                style={{
+                  border: isSelected ? '2px solid var(--color-primary)' : '1.5px solid var(--color-border)',
+                  background: isSelected ? 'var(--color-primary-soft)' : 'var(--color-surface)',
+                  position: 'relative',
+                  cursor: 'pointer',
+                  padding: '12px 8px'
+                }}
               >
-                <div className="role-card-icon"><SelectedIcon size={20} /></div>
-                <span className="role-card-label">{r.label}</span>
-              </div>
+                {isSelected && (
+                  <span style={{
+                    position: 'absolute',
+                    top: 4,
+                    right: 6,
+                    fontSize: '0.7rem',
+                    color: 'var(--color-primary)',
+                    fontWeight: 700
+                  }}>✓</span>
+                )}
+                <div className="role-option__icon role-card-icon" style={{
+                  background: isSelected ? 'var(--color-primary)' : 'var(--color-surface-2)',
+                  color: isSelected ? '#ffffff' : 'inherit'
+                }}>
+                  <SelectedIcon size={20} />
+                </div>
+                <span className="role-card-label" style={{
+                  fontWeight: isSelected ? 700 : 500,
+                  color: isSelected ? 'var(--color-primary)' : 'inherit'
+                }}>
+                  {r.label}
+                </span>
+              </button>
             );
           })}
         </div>
+        <FieldError id="su-role-err" msg={errors.role} />
       </div>
 
-      <button id="signup-submit" type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: 8 }} disabled={loading}>
-        <span>{loading ? 'Sending Verification Code...' : 'Continue to Verification'}</span>
+      <div style={{ margin: '8px 0 12px 0' }}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: '0.82rem', color: 'var(--color-text-2)' }}>
+          <input
+            type="checkbox"
+            checked={useOtp}
+            onChange={e => setUseOtp(e.target.checked)}
+          />
+          <span>Verify account with Two-Step Security OTP</span>
+        </label>
+      </div>
+
+      <button id="signup-submit" type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: 4 }} disabled={loading}>
+        <span>{loading ? 'Creating Account...' : (useOtp ? 'Register with Two-Step OTP' : 'Create Account & Sign In')}</span>
         <ArrowRightIcon size={16} />
       </button>
+
+      <div style={{ textAlign: 'center', marginTop: 14 }}>
+        <span style={{ fontSize: '0.84rem', color: 'var(--color-text-2)' }}>Already have an account? </span>
+        <button
+          type="button"
+          onClick={onSwitchToLogin}
+          style={{ fontWeight: 700, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '0.84rem' }}
+        >
+          Sign In
+        </button>
+      </div>
     </form>
   );
 }
 
 /* ── Login Form ───────────────────────────────────── */
-function LoginForm({ onSubmit, loading, serverError, onDemoLogin, demoMode }) {
+function LoginForm({
+  onDirectLogin,
+  onOtpLogin,
+  loading,
+  serverError,
+  onDemoLogin,
+  demoMode,
+  onSwitchToSignUp
+}) {
   const [form, setForm] = useState({ identifier: '', password: '' });
   const [errors, setErrors] = useState({});
+  const [useOtp, setUseOtp] = useState(false);
 
   const change = e => {
     const { name, value } = e.target;
@@ -241,20 +312,28 @@ function LoginForm({ onSubmit, loading, serverError, onDemoLogin, demoMode }) {
 
   const validate = () => {
     const e = {};
-    if (!form.identifier.trim()) e.identifier = 'Email or phone is required.';
-    if (!demoMode && !form.password) e.password = 'Password is required.';
+    if (!form.identifier.trim()) {
+      e.identifier = useOtp ? 'Please enter your email or phone to receive an OTP code.' : 'Email or phone is required.';
+    }
+    if (!useOtp && !demoMode && !form.password) {
+      e.password = 'Password is required.';
+    }
     return e;
   };
 
-  const submit = e => {
+  const handleSubmit = e => {
     e.preventDefault();
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
-    onSubmit(form);
+    if (useOtp) {
+      onOtpLogin(form);
+    } else {
+      onDirectLogin(form);
+    }
   };
 
   return (
-    <form onSubmit={submit} noValidate aria-label="Login form">
+    <form onSubmit={handleSubmit} noValidate aria-label="Login form">
       {serverError && (
         <div className="alert alert-error" style={{ marginBottom: 16 }}>
           <AlertCircleIcon size={16} />
@@ -283,37 +362,107 @@ function LoginForm({ onSubmit, loading, serverError, onDemoLogin, demoMode }) {
         <FieldError id="li-id-err" msg={errors.identifier} />
       </div>
 
-      <div className="form-group">
-        <label htmlFor="li-password" className="form-label">
-          Password {demoMode ? '(Optional in Demo Mode)' : <span className="required-dot" />}
+      {!useOtp && (
+        <div className="form-group">
+          <label htmlFor="li-password" className="form-label">
+            Password {demoMode ? '(Optional in Demo Mode)' : <span className="required-dot" />}
+          </label>
+          <PasswordInput
+            id="li-password"
+            name="password"
+            value={form.password}
+            onChange={change}
+            placeholder="Enter password"
+            error={errors.password}
+          />
+          <FieldError id="li-pw-err" msg={errors.password} />
+        </div>
+      )}
+
+      <div style={{ margin: '4px 0 12px 0' }}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: '0.82rem', color: 'var(--color-text-2)' }}>
+          <input
+            type="checkbox"
+            checked={useOtp}
+            onChange={e => { setUseOtp(e.target.checked); setErrors({}); }}
+          />
+          <span>Sign in with Two-Step Verification OTP (2FA)</span>
         </label>
-        <PasswordInput
-          id="li-password"
-          name="password"
-          value={form.password}
-          onChange={change}
-          placeholder="Enter password"
-          error={errors.password}
-        />
-        <FieldError id="li-pw-err" msg={errors.password} />
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+      {useOtp && (
+        <div style={{ background: 'var(--color-primary-soft)', border: '1px solid rgba(14, 165, 233, 0.25)', borderRadius: 'var(--radius-sm)', padding: '10px 14px', marginBottom: 14, fontSize: '0.82rem', color: 'var(--color-primary)', lineHeight: 1.4 }}>
+          🛡️ <strong>Passwordless 2FA Mode:</strong> Enter your email or phone above. We will send a secure 6-digit one-time code to authenticate your session.
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
         <button id="login-submit" type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={loading}>
-          <span>{loading ? 'Sending Code...' : 'Log In & Verify'}</span>
+          <span>{loading ? 'Processing...' : (useOtp ? 'Send Verification OTP' : 'Sign In')}</span>
           <ArrowRightIcon size={16} />
         </button>
 
-        {demoMode && (
+        <div style={{ textAlign: 'center', marginTop: 4 }}>
+          <span style={{ fontSize: '0.84rem', color: 'var(--color-text-2)' }}>Don't have an account? </span>
           <button
             type="button"
-            className="btn btn-secondary btn-sm"
-            style={{ width: '100%' }}
-            onClick={onDemoLogin}
-            disabled={loading}
+            onClick={onSwitchToSignUp}
+            style={{ fontWeight: 700, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '0.84rem' }}
           >
-            <span>Quick Login: Himanshu Patel (Demo)</span>
+            Create an Account
           </button>
+        </div>
+
+        {demoMode && (
+          <div className="demo-login-section" style={{ marginTop: 8, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              1-Click Demo Login (Instant Access)
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              <button
+                id="demo-login-patient"
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => onDemoLogin('patient')}
+                disabled={loading}
+                title="Instant Login as Patient: Himanshu Patel"
+              >
+                <span>👤 Patient</span>
+              </button>
+              <button
+                id="demo-login-caregiver"
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => onDemoLogin('caregiver')}
+                disabled={loading}
+                title="Instant Login as Caregiver: Divyadarshan Chauhan"
+              >
+                <span>🤝 Caregiver</span>
+              </button>
+              <button
+                id="demo-login-clinician"
+                type="button"
+                className="btn btn-secondary btn-xs"
+                onClick={() => onDemoLogin('clinician')}
+                disabled={loading}
+                title="Instant Login as Clinician: Prof. Sathwik Chebrolu"
+              >
+                <span>🩺 Clinician</span>
+              </button>
+            </div>
+            <div style={{ marginTop: 8, textAlign: 'center' }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-xs"
+                onClick={() => {
+                  setForm({ identifier: 'himanshu@paruluniversity.ac.in', password: 'DemoPassword123!' });
+                  setErrors({});
+                }}
+              >
+                <span>Fill Demo Credentials into Form</span>
+              </button>
+            </div>
+          </div>
         )}
       </div>
     </form>
@@ -321,7 +470,7 @@ function LoginForm({ onSubmit, loading, serverError, onDemoLogin, demoMode }) {
 }
 
 /* ── Auth Screen ──────────────────────────────────── */
-export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearSessionExpiredMessage }) {
+export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMessage, onClearSessionExpiredMessage }) {
   const [mode, setMode] = useState('login');
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState('');
@@ -333,7 +482,23 @@ export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearS
     });
   }, []);
 
-  const handleSignUpSubmit = async (formData) => {
+  const handleDirectSignUp = async (formData) => {
+    if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
+    setLoading(true);
+    setServerError('');
+    try {
+      const res = await api.directRegister(formData);
+      setLoading(false);
+      if (onDirectLogin) {
+        onDirectLogin(res.user, res.token, true);
+      }
+    } catch (err) {
+      setLoading(false);
+      setServerError(err.message || 'Registration failed. Please try again.');
+    }
+  };
+
+  const handleOtpSignUp = async (formData) => {
     if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
     setLoading(true);
     setServerError('');
@@ -343,7 +508,10 @@ export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearS
       onComplete({
         type: 'signup',
         email: res.email || formData.email,
-        data: formData
+        data: formData,
+        demoOtp: res.demo_otp,
+        totpSecret: res.totp_secret,
+        totpQr: res.totp_qr
       });
     } catch (err) {
       setLoading(false);
@@ -351,7 +519,23 @@ export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearS
     }
   };
 
-  const handleLoginSubmit = async (formData) => {
+  const handleDirectLoginSubmit = async (formData) => {
+    if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
+    setLoading(true);
+    setServerError('');
+    try {
+      const res = await api.directLogin(formData);
+      setLoading(false);
+      if (onDirectLogin) {
+        onDirectLogin(res.user, res.token, false);
+      }
+    } catch (err) {
+      setLoading(false);
+      setServerError(err.message || 'Login failed. Please check your credentials.');
+    }
+  };
+
+  const handleOtpLoginSubmit = async (formData) => {
     if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
     setLoading(true);
     setServerError('');
@@ -361,7 +545,10 @@ export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearS
       onComplete({
         type: 'login',
         email: res.email || formData.identifier,
-        data: formData
+        data: formData,
+        demoOtp: res.demo_otp,
+        totpSecret: res.totp_secret,
+        totpQr: res.totp_qr
       });
     } catch (err) {
       setLoading(false);
@@ -369,25 +556,16 @@ export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearS
     }
   };
 
-  const handleDemoLogin = async () => {
+  const handleDemoLogin = async (role = 'patient') => {
     if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
     setLoading(true);
     setServerError('');
     try {
-      const res = await api.login({
-        identifier: 'himanshu@paruluniversity.ac.in',
-        password: 'DemoPassword123!'
-      });
+      const res = await api.demoLogin(role);
       setLoading(false);
-      onComplete({
-        type: 'login',
-        email: res.email || 'himanshu@paruluniversity.ac.in',
-        data: {
-          fullName: 'Himanshu Patel',
-          email: 'himanshu@paruluniversity.ac.in',
-          role: 'patient'
-        }
-      });
+      if (onDirectLogin) {
+        onDirectLogin(res.user, res.token, false);
+      }
     } catch (err) {
       setLoading(false);
       setServerError(err.message || 'Demo login failed.');
@@ -415,6 +593,11 @@ export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearS
               </div>
             ))}
           </div>
+
+          <div className="preview-academic-tag">
+            <span className="academic-badge">Academic Project</span>
+            <span className="academic-text">Parul University • Guide: Prof. Sathwik Chebrolu</span>
+          </div>
         </div>
 
         <div className="auth-panel-form">
@@ -431,8 +614,8 @@ export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearS
             <h1 className="screen-title">{mode === 'login' ? 'Sign In' : 'Create Account'}</h1>
             <p className="screen-subtitle">
               {mode === 'login'
-                ? 'Enter your credentials to receive your two-factor verification code.'
-                : 'Register your profile to set up your medication schedule.'}
+                ? 'Sign in to access your medication schedule and dashboard.'
+                : 'Register your profile to set up your personalized medication schedule.'}
             </p>
 
             <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
@@ -458,17 +641,21 @@ export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearS
 
             {mode === 'login' ? (
               <LoginForm
-                onSubmit={handleLoginSubmit}
+                onDirectLogin={handleDirectLoginSubmit}
+                onOtpLogin={handleOtpLoginSubmit}
                 loading={loading}
                 serverError={serverError}
                 onDemoLogin={handleDemoLogin}
                 demoMode={config.demo_mode}
+                onSwitchToSignUp={() => { setMode('signup'); setServerError(''); }}
               />
             ) : (
               <SignUpForm
-                onSubmit={handleSignUpSubmit}
+                onDirectSignUp={handleDirectSignUp}
+                onOtpSignUp={handleOtpSignUp}
                 loading={loading}
                 serverError={serverError}
+                onSwitchToLogin={() => { setMode('login'); setServerError(''); }}
               />
             )}
           </div>

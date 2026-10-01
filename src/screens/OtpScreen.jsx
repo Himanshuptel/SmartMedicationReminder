@@ -16,14 +16,41 @@ function maskContact(str) {
   return str.replace(/\d(?=\d{4})/g, '*');
 }
 
-export default function OtpScreen({ authData, onVerified }) {
+export default function OtpScreen({ authData, onVerified, onBack }) {
   const [digits, setDigits] = useState(Array(OTP_LEN).fill(''));
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECS);
   const [canResend, setCanResend] = useState(false);
+  const [demoOtp, setDemoOtp] = useState(authData?.demoOtp || authData?.data?.demoOtp || '');
+  const [totpQr, setTotpQr] = useState(authData?.totpQr || authData?.data?.totpQr || '');
+  const [totpSecret, setTotpSecret] = useState(authData?.totpSecret || authData?.data?.totpSecret || '');
+  const [showTotpModal, setShowTotpModal] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [loadingTotp, setLoadingTotp] = useState(false);
   const inputRefs = useRef([]);
+
+  useEffect(() => {
+    if (authData?.demoOtp) {
+      setDemoOtp(authData.demoOtp);
+    }
+    if (authData?.totpQr) {
+      setTotpQr(authData.totpQr);
+    }
+    if (authData?.totpSecret) {
+      setTotpSecret(authData.totpSecret);
+    }
+  }, [authData]);
+
+  const handleAutoFill = () => {
+    if (!demoOtp) return;
+    const chars = String(demoOtp).slice(0, OTP_LEN).split('');
+    const nextDigits = Array(OTP_LEN).fill('');
+    chars.forEach((c, i) => { nextDigits[i] = c; });
+    setDigits(nextDigits);
+    setError('');
+  };
 
   useEffect(() => {
     if (countdown <= 0) { setCanResend(true); return; }
@@ -37,6 +64,28 @@ export default function OtpScreen({ authData, onVerified }) {
 
   const contactEmail = authData?.email || authData?.data?.email || authData?.data?.identifier || '';
   const maskedContact = maskContact(contactEmail);
+
+  // If TOTP QR isn't available yet, fetch it from backend
+  useEffect(() => {
+    if (!totpQr && contactEmail) {
+      setLoadingTotp(true);
+      api.getTotpSetup({ email: contactEmail })
+        .then(res => {
+          if (res?.totp_qr) setTotpQr(res.totp_qr);
+          if (res?.totp_secret) setTotpSecret(res.totp_secret);
+        })
+        .catch(() => {})
+        .finally(() => setLoadingTotp(false));
+    }
+  }, [contactEmail, totpQr]);
+
+  const handleCopySecret = () => {
+    if (!totpSecret) return;
+    navigator.clipboard.writeText(totpSecret).then(() => {
+      setCopiedKey(true);
+      setTimeout(() => setCopiedKey(false), 2500);
+    });
+  };
 
   const handleChange = (idx, val) => {
     const digit = val.replace(/\D/, '').slice(-1);
@@ -80,10 +129,19 @@ export default function OtpScreen({ authData, onVerified }) {
     setError('');
     setSuccessMsg('');
     try {
-      await api.resendOtp({ email: contactEmail });
+      const res = await api.resendOtp({ email: contactEmail });
       setDigits(Array(OTP_LEN).fill(''));
       setCountdown(COUNTDOWN_SECS);
       setCanResend(false);
+      if (res?.demo_otp) {
+        setDemoOtp(res.demo_otp);
+      }
+      if (res?.totp_qr) {
+        setTotpQr(res.totp_qr);
+      }
+      if (res?.totp_secret) {
+        setTotpSecret(res.totp_secret);
+      }
       setSuccessMsg('A new verification code has been dispatched.');
       inputRefs.current[0]?.focus();
     } catch (err) {
@@ -115,6 +173,19 @@ export default function OtpScreen({ authData, onVerified }) {
     }
   };
 
+  const handleSkipOtp = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await api.skipOtp({ email: contactEmail });
+      setLoading(false);
+      onVerified(res.user, res.token);
+    } catch (err) {
+      setLoading(false);
+      setError(err.message || 'Instant verification failed.');
+    }
+  };
+
   const hasError = !!error;
 
   return (
@@ -137,6 +208,116 @@ export default function OtpScreen({ authData, onVerified }) {
           <strong>{maskedContact}</strong>
         </div>
 
+        {demoOtp && (
+          <div className="alert alert-info" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <span style={{ fontSize: '0.85rem' }}>Demo Mode Verification Code: </span>
+              <strong style={{ fontSize: '1.1rem', letterSpacing: '2px', marginLeft: 4 }}>{demoOtp}</strong>
+            </div>
+            <button
+              type="button"
+              className="btn btn-outline-primary btn-xs"
+              onClick={handleAutoFill}
+            >
+              Auto-fill Code
+            </button>
+          </div>
+        )}
+
+        {/* 📱 Free Google Authenticator (TOTP MFA) Integration */}
+        <div style={{
+          marginBottom: 18,
+          background: 'var(--color-bg-secondary, #f8fafc)',
+          border: '1px solid var(--color-border, #e2e8f0)',
+          borderRadius: 12,
+          padding: '12px 16px',
+          textAlign: 'left'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '1.3rem' }}>📱</span>
+              <div>
+                <strong style={{ fontSize: '0.9rem', display: 'block', color: 'var(--color-text, #1e293b)' }}>
+                  Google Authenticator (Free MFA)
+                </strong>
+                <span style={{ fontSize: '0.78rem', color: 'var(--color-text-secondary, #64748b)' }}>
+                  Scan with Google or Microsoft Authenticator
+                </span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-outline-primary btn-xs"
+              onClick={() => setShowTotpModal(prev => !prev)}
+              style={{ fontWeight: 600, borderRadius: 8, whiteSpace: 'nowrap' }}
+            >
+              {showTotpModal ? '✕ Close QR' : '📷 Show QR Code'}
+            </button>
+          </div>
+
+          {showTotpModal && (
+            <div style={{
+              marginTop: 12,
+              paddingTop: 12,
+              borderTop: '1px dashed var(--color-border, #cbd5e1)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              textAlign: 'center'
+            }}>
+              {totpQr ? (
+                <>
+                  <div style={{
+                    background: '#ffffff',
+                    padding: 8,
+                    borderRadius: 10,
+                    boxShadow: '0 4px 14px rgba(0,0,0,0.08)',
+                    display: 'inline-block'
+                  }}>
+                    <img
+                      src={totpQr}
+                      alt="Google Authenticator QR Code"
+                      width={170}
+                      height={170}
+                      style={{ display: 'block', borderRadius: 6 }}
+                    />
+                  </div>
+                  <p style={{ fontSize: '0.8rem', marginTop: 10, marginBottom: 8, color: 'var(--color-text, #334155)', maxWidth: 280 }}>
+                    Scan with <strong>Google Authenticator</strong>, then type the 6-digit rolling code below.
+                  </p>
+                  {totpSecret && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      background: 'rgba(0,0,0,0.04)',
+                      padding: '4px 10px',
+                      borderRadius: 6,
+                      fontSize: '0.75rem',
+                      fontFamily: 'monospace'
+                    }}>
+                      <span>Key: <strong>{totpSecret}</strong></span>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-xs"
+                        style={{ padding: '2px 6px', fontSize: '0.72rem' }}
+                        onClick={handleCopySecret}
+                        title="Copy secret key to clipboard"
+                      >
+                        {copiedKey ? '✓ Copied' : 'Copy Key'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <span style={{ fontSize: '0.85rem', color: '#64748b' }}>
+                  {loadingTotp ? 'Generating Google Authenticator QR...' : 'Authenticator setup ready.'}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
         {hasError && (
           <div className="alert alert-error" role="alert" style={{ marginBottom: 16 }}>
             <AlertCircleIcon size={16} />
@@ -152,7 +333,7 @@ export default function OtpScreen({ authData, onVerified }) {
         )}
 
         <form onSubmit={handleVerify} aria-label="OTP verification form">
-          <div className="otp-group" role="group" aria-label="Enter 6-digit verification code">
+          <div className="otp-row otp-group" role="group" aria-label="Enter 6-digit verification code">
             {digits.map((digit, idx) => (
               <input
                 key={idx}
@@ -162,7 +343,7 @@ export default function OtpScreen({ authData, onVerified }) {
                 inputMode="numeric"
                 pattern="[0-9]*"
                 maxLength={1}
-                className={`otp-digit${hasError ? ' input-error' : ''}${digit ? ' filled' : ''}`}
+                className={`otp-cell otp-digit${hasError ? ' otp-error input-error' : ''}${digit ? ' filled' : ''}`}
                 value={digit}
                 onChange={e => handleChange(idx, e.target.value)}
                 onKeyDown={e => handleKeyDown(idx, e)}
@@ -190,6 +371,18 @@ export default function OtpScreen({ authData, onVerified }) {
               </>
             )}
           </button>
+
+          <button
+            id="skip-otp-btn"
+            type="button"
+            className="btn btn-secondary btn-sm"
+            style={{ width: '100%', marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+            onClick={handleSkipOtp}
+            disabled={loading}
+            title="Skip OTP and sign in immediately (Demo & Offline mode)"
+          >
+            <span>⚡ Instant Verify & Skip OTP</span>
+          </button>
         </form>
 
         <div className="otp-resend">
@@ -207,6 +400,17 @@ export default function OtpScreen({ authData, onVerified }) {
               Resend code in <strong>{countdown}s</strong>
             </p>
           )}
+        </div>
+
+        <div style={{ marginTop: 16, textAlign: 'center' }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs text-muted"
+            onClick={onBack}
+            disabled={loading}
+          >
+            ← Back to Sign In
+          </button>
         </div>
       </div>
     </main>

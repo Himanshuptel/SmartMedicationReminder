@@ -2824,3 +2824,89 @@ input[type="date"].form-input {
   gap: 12px;
 }
 
+/* Phase 4: Persistent Backend Offline Banner */
+.backend-offline-banner {
+  position: sticky;
+  top: 0;
+  z-index: 9999;
+  background: linear-gradient(90deg, #dc2626, #b91c1c);
+  color: #ffffff;
+  padding: 10px 20px;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35);
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.offline-banner-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.offline-banner-content .offline-icon {
+  font-size: 1.4rem;
+}
+
+.offline-banner-content strong {
+  display: block;
+  font-size: 0.95rem;
+  letter-spacing: 0.2px;
+}
+
+.offline-banner-content p {
+  margin: 2px 0 0 0;
+  font-size: 0.82rem;
+  opacity: 0.92;
+}
+
+.offline-banner-content code {
+  background: rgba(0, 0, 0, 0.25);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.82rem;
+}
+
+.btn-offline-retry {
+  background: #ffffff;
+  color: #dc2626;
+  border: none;
+  font-weight: 700;
+  font-size: 0.82rem;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-offline-retry:hover {
+  background: #fef2f2;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.missed-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--color-error);
+  font-weight: 600;
+  padding: 4px 8px;
+  background: rgba(239, 68, 68, 0.08);
+  border-radius: 4px;
+}
+

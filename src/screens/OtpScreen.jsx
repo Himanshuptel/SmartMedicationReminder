@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ProgressBar from '../components/ProgressBar';
-import { LockIcon, AlertCircleIcon, RefreshIcon, ArrowRightIcon } from '../components/Icons';
+import { api } from '../services/api';
+import { LockIcon, AlertCircleIcon, RefreshIcon, ArrowRightIcon, CheckCircleIcon } from '../components/Icons';
 
 const OTP_LEN = 6;
-const DEMO_OTP = '123456';
 const COUNTDOWN_SECS = 30;
 
 function maskContact(str) {
@@ -19,6 +19,7 @@ function maskContact(str) {
 export default function OtpScreen({ authData, onVerified }) {
   const [digits, setDigits] = useState(Array(OTP_LEN).fill(''));
   const [error, setError] = useState('');
+  const [successMsg, setSuccessMsg] = useState('');
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECS);
   const [canResend, setCanResend] = useState(false);
@@ -34,11 +35,8 @@ export default function OtpScreen({ authData, onVerified }) {
     inputRefs.current[0]?.focus();
   }, []);
 
-  const contact = authData?.type === 'signup'
-    ? (authData.data?.phone || authData.data?.email)
-    : authData?.data?.identifier;
-
-  const maskedContact = maskContact(contact);
+  const contactEmail = authData?.email || authData?.data?.email || authData?.data?.identifier || '';
+  const maskedContact = maskContact(contactEmail);
 
   const handleChange = (idx, val) => {
     const digit = val.replace(/\D/, '').slice(-1);
@@ -46,6 +44,7 @@ export default function OtpScreen({ authData, onVerified }) {
     next[idx] = digit;
     setDigits(next);
     setError('');
+    setSuccessMsg('');
 
     if (digit && idx < OTP_LEN - 1) {
       inputRefs.current[idx + 1]?.focus();
@@ -76,13 +75,20 @@ export default function OtpScreen({ authData, onVerified }) {
     inputRefs.current[Math.min(pasted.length, OTP_LEN - 1)]?.focus();
   };
 
-  const handleResend = () => {
+  const handleResend = async () => {
     if (!canResend) return;
-    setDigits(Array(OTP_LEN).fill(''));
     setError('');
-    setCountdown(COUNTDOWN_SECS);
-    setCanResend(false);
-    inputRefs.current[0]?.focus();
+    setSuccessMsg('');
+    try {
+      await api.resendOtp({ email: contactEmail });
+      setDigits(Array(OTP_LEN).fill(''));
+      setCountdown(COUNTDOWN_SECS);
+      setCanResend(false);
+      setSuccessMsg('A new verification code has been dispatched.');
+      inputRefs.current[0]?.focus();
+    } catch (err) {
+      setError(err.message || 'Failed to resend verification code.');
+    }
   };
 
   const handleVerify = async e => {
@@ -92,14 +98,18 @@ export default function OtpScreen({ authData, onVerified }) {
       setError('Please enter all 6 digits.');
       return;
     }
-    setLoading(true);
-    await new Promise(r => setTimeout(r, 800));
-    setLoading(false);
 
-    if (otp === DEMO_OTP) {
-      onVerified();
-    } else {
-      setError('Invalid code. Use 123456 for demo.');
+    setLoading(true);
+    setError('');
+    setSuccessMsg('');
+
+    try {
+      const res = await api.verifyOtp({ email: contactEmail, otp });
+      setLoading(false);
+      onVerified(res.user, res.token);
+    } catch (err) {
+      setLoading(false);
+      setError(err.message || 'Invalid verification code.');
       setDigits(Array(OTP_LEN).fill(''));
       inputRefs.current[0]?.focus();
     }
@@ -113,18 +123,13 @@ export default function OtpScreen({ authData, onVerified }) {
         <ProgressBar currentStep={2} />
 
         <div className="logo-strip">
-          <img
-            src={`${import.meta.env.BASE_URL}logo.png`}
-            alt=""
-            width={32}
-            height={32}
-          />
+          <img src={`${import.meta.env.BASE_URL}logo.png`} alt="" width={32} height={32} />
           <span className="logo-strip__name">Smart Medication Reminder</span>
         </div>
 
-        <h1 className="screen-title">Verify your identity</h1>
+        <h1 className="screen-title">Two-Step Verification</h1>
         <p className="screen-subtitle">
-          Enter the 6-digit verification code sent to your registered contact.
+          Enter the 6-digit numeric verification code sent to your registered contact.
         </p>
 
         <div className="masked-contact-box" aria-live="polite">
@@ -133,74 +138,76 @@ export default function OtpScreen({ authData, onVerified }) {
         </div>
 
         {hasError && (
-          <div className="alert alert-error" role="alert">
+          <div className="alert alert-error" role="alert" style={{ marginBottom: 16 }}>
             <AlertCircleIcon size={16} />
             <span>{error}</span>
           </div>
         )}
 
-        <form onSubmit={handleVerify} noValidate aria-label="OTP verification form">
-          <div className="otp-row" role="group" aria-label="One-time password input">
-            {digits.map((d, idx) => (
+        {successMsg && (
+          <div className="alert alert-success" role="status" style={{ marginBottom: 16 }}>
+            <CheckCircleIcon size={16} />
+            <span>{successMsg}</span>
+          </div>
+        )}
+
+        <form onSubmit={handleVerify} aria-label="OTP verification form">
+          <div className="otp-group" role="group" aria-label="Enter 6-digit verification code">
+            {digits.map((digit, idx) => (
               <input
                 key={idx}
-                ref={el => (inputRefs.current[idx] = el)}
+                ref={el => { inputRefs.current[idx] = el; }}
                 id={`otp-${idx}`}
                 type="text"
                 inputMode="numeric"
+                pattern="[0-9]*"
                 maxLength={1}
-                className={`otp-cell${d ? ' filled' : ''}${hasError ? ' otp-error' : ''}`}
-                value={d}
+                className={`otp-digit${hasError ? ' input-error' : ''}${digit ? ' filled' : ''}`}
+                value={digit}
                 onChange={e => handleChange(idx, e.target.value)}
                 onKeyDown={e => handleKeyDown(idx, e)}
                 onPaste={idx === 0 ? handlePaste : undefined}
-                aria-label={`Digit ${idx + 1}`}
                 autoComplete="one-time-code"
+                aria-label={`Digit ${idx + 1}`}
+                aria-invalid={hasError}
               />
             ))}
           </div>
 
-          <div className="countdown-row" aria-live="polite">
-            {canResend ? (
-              <button type="button" className="resend-btn" onClick={handleResend} id="resend-otp">
-                <RefreshIcon size={14} style={{ marginRight: 4, verticalAlign: 'middle' }} />
-                Resend Code
-              </button>
+          <button
+            id="otp-submit"
+            type="submit"
+            className="btn btn-primary"
+            style={{ width: '100%', marginTop: 24 }}
+            disabled={loading || digits.join('').length < OTP_LEN}
+          >
+            {loading ? (
+              <span>Verifying code...</span>
             ) : (
-              <span>
-                Resend code in{' '}
-                <strong className="countdown-timer">
-                  0:{String(countdown).padStart(2, '0')}
-                </strong>
-              </span>
+              <>
+                <span>Confirm & Sign In</span>
+                <ArrowRightIcon size={16} />
+              </>
             )}
-          </div>
-
-          <div style={{ marginTop: 28 }}>
-            <button
-              id="verify-otp"
-              type="submit"
-              className="btn btn-primary"
-              disabled={loading || digits.join('').length < OTP_LEN}
-            >
-              {loading ? (
-                <>
-                  <span className="spinner" />
-                  <span>Verifying...</span>
-                </>
-              ) : (
-                <>
-                  <span>Verify &amp; Continue</span>
-                  <ArrowRightIcon size={16} />
-                </>
-              )}
-            </button>
-          </div>
-
-          <p style={{ textAlign: 'center', marginTop: 14, fontSize: '0.8125rem', color: 'var(--color-text-3)' }}>
-            Demo passcode: <strong>123456</strong>
-          </p>
+          </button>
         </form>
+
+        <div className="otp-resend">
+          {canResend ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={handleResend}
+            >
+              <RefreshIcon size={14} />
+              <span>Resend Verification Code</span>
+            </button>
+          ) : (
+            <p className="resend-countdown">
+              Resend code in <strong>{countdown}s</strong>
+            </p>
+          )}
+        </div>
       </div>
     </main>
   );

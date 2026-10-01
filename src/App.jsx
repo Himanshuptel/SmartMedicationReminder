@@ -38,29 +38,24 @@ export default function App() {
   const [systemDesignOpen, setSystemDesignOpen] = useState(false);
 
   // Notification Feed
-  const [notifications, setNotifications] = useState([
-    {
-      id: 1,
-      title: 'Low Stock Refill Warning',
-      message: 'Lisinopril 10mg has only 4 tablets remaining.',
-      time: '10m ago',
-      status: 'unread'
-    },
-    {
-      id: 2,
-      title: 'Morning Dose Confirmed',
-      message: 'Metformin 500mg logged as taken at 08:35 AM.',
-      time: '1h ago',
-      status: 'read'
-    },
-    {
-      id: 3,
-      title: 'Clinician Recommendation',
-      message: 'Dr. Sathwik Chebrolu: Blood pressure is stable. Continue current regimen.',
-      time: 'Yesterday',
-      status: 'read'
-    }
-  ]);
+  const [notifications, setNotifications] = useState([]);
+
+  useEffect(() => {
+    let mounted = true;
+    const fetchNotifs = async () => {
+      try {
+        const res = await api.getNotifications(authData);
+        if (mounted && res?.notifications) {
+          setNotifications(res.notifications);
+        }
+      } catch (err) {
+        console.error('Error fetching notifications:', err);
+      }
+    };
+    fetchNotifs();
+    const interval = setInterval(fetchNotifs, 15000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, [authData]);
 
   // Dark mode — persisted in localStorage
   const [darkMode, setDarkMode] = useState(() => {
@@ -81,18 +76,70 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [screen]);
 
-  const handleAuthComplete = (payload) => {
-    setAuthData(payload);
-    try { localStorage.setItem('medremind_auth', JSON.stringify(payload)); } catch {}
-    if (payload?.type === 'login') {
-      setScreen(SCREENS.DASHBOARD);
-    } else {
-      setScreen(SCREENS.OTP);
+  // Backend Unreachable & Session Expiration State
+  const [isBackendUnreachable, setIsBackendUnreachable] = useState(false);
+  const [sessionExpiredMessage, setSessionExpiredMessage] = useState('');
+
+  // Handle network reachability events
+  useEffect(() => {
+    const handleOffline = () => setIsBackendUnreachable(true);
+    const handleOnline = () => setIsBackendUnreachable(false);
+
+    window.addEventListener('medremind:backend-offline', handleOffline);
+    window.addEventListener('medremind:backend-online', handleOnline);
+
+    // Initial ping to verify backend status
+    api.getConfig().then(() => setIsBackendUnreachable(false)).catch(() => setIsBackendUnreachable(true));
+
+    return () => {
+      window.removeEventListener('medremind:backend-offline', handleOffline);
+      window.removeEventListener('medremind:backend-online', handleOnline);
+    };
+  }, []);
+
+  const handleRetryBackend = async () => {
+    try {
+      await api.getConfig();
+      setIsBackendUnreachable(false);
+    } catch {
+      setIsBackendUnreachable(true);
     }
   };
 
-  const handleOtpVerified = () => {
-    setScreen(SCREENS.MEDICINES);
+  // Handle session expiration redirect
+  useEffect(() => {
+    const handleExpired = (e) => {
+      setAuthData(null);
+      setSessionExpiredMessage('Your session has expired or is invalid. Please sign in again.');
+      setScreen(SCREENS.AUTH);
+    };
+    window.addEventListener('medremind:session-expired', handleExpired);
+    return () => window.removeEventListener('medremind:session-expired', handleExpired);
+  }, []);
+
+  const handleAuthComplete = (payload) => {
+    setSessionExpiredMessage('');
+    setAuthData(payload);
+    setScreen(SCREENS.OTP);
+  };
+
+  const handleOtpVerified = (verifiedUser, token) => {
+    const payload = {
+      type: 'authenticated',
+      data: verifiedUser,
+      token: token
+    };
+    setAuthData(payload);
+    try {
+      localStorage.setItem('medremind_auth', JSON.stringify(payload));
+      localStorage.setItem('medremind_token', token);
+    } catch {}
+
+    if (authData?.type === 'signup') {
+      setScreen(SCREENS.MEDICINES);
+    } else {
+      setScreen(SCREENS.DASHBOARD);
+    }
   };
 
   const handleMedicinesSaved = (medicines) => {
@@ -148,28 +195,37 @@ export default function App() {
   const isDemo = isDemoUser(authData);
 
   const handleSwitchToDemo = () => {
-    const demoAuth = {
-      type: 'login',
-      data: {
-        fullName: 'Himanshu Patel',
-        email: 'himanshu@paruluniversity.ac.in',
-        identifier: 'himanshu@paruluniversity.ac.in',
-        role: 'patient'
-      }
-    };
-    setAuthData(demoAuth);
-    try { localStorage.setItem('medremind_auth', JSON.stringify(demoAuth)); } catch {}
-    setScreen(SCREENS.DASHBOARD);
+    setScreen(SCREENS.AUTH);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await api.logout();
     setAuthData(null);
-    try { localStorage.removeItem('medremind_auth'); } catch {}
     setScreen(SCREENS.AUTH);
   };
 
   return (
     <div className="app-shell">
+      {/* Persistent Backend Unreachable Alert Banner */}
+      {isBackendUnreachable && (
+        <aside className="backend-offline-banner" role="alert" aria-live="assertive">
+          <div className="offline-banner-content">
+            <span className="offline-icon" aria-hidden="true">⚠️</span>
+            <div>
+              <strong>Backend Server Unreachable</strong>
+              <p>Unable to connect to Flask API server at <code>/api</code>. Please ensure the Python backend is running.</p>
+            </div>
+            <button
+              type="button"
+              className="btn-offline-retry"
+              onClick={handleRetryBackend}
+            >
+              Retry Connection
+            </button>
+          </div>
+        </aside>
+      )}
+
       <TopBar
         darkMode={darkMode}
         onToggleDark={() => setDarkMode(d => !d)}
@@ -216,6 +272,8 @@ export default function App() {
         <AuthScreen
           onComplete={handleAuthComplete}
           onSkipToDashboard={() => setScreen(SCREENS.DASHBOARD)}
+          sessionExpiredMessage={sessionExpiredMessage}
+          onClearSessionExpiredMessage={() => setSessionExpiredMessage('')}
         />
       )}
 

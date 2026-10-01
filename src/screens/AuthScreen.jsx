@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ProgressBar from '../components/ProgressBar';
+import { api } from '../services/api';
 import {
   UserIcon, MailIcon, PhoneIcon, LockIcon, EyeIcon, EyeOffIcon,
-  UserPlusIcon, LogInIcon, ArrowRightIcon, AlertCircleIcon,
-  ShieldIcon, UsersIcon, StethoscopeIcon, PillIcon, BellIcon, BarChart2Icon
+  ArrowRightIcon, AlertCircleIcon, ShieldIcon, UsersIcon, StethoscopeIcon,
+  PillIcon, BellIcon, BarChart2Icon
 } from '../components/Icons';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -57,9 +58,9 @@ function FieldError({ id, msg }) {
 }
 
 /* ── Sign Up Form ─────────────────────────────────── */
-function SignUpForm({ onSubmit }) {
+function SignUpForm({ onSubmit, loading, serverError }) {
   const [form, setForm] = useState({
-    fullName: '', email: '', phone: '', password: '', confirmPassword: '', role: '',
+    fullName: '', email: '', phone: '', password: '', confirmPassword: '', role: 'patient',
   });
   const [errors, setErrors] = useState({});
 
@@ -77,7 +78,7 @@ function SignUpForm({ onSubmit }) {
     if (!form.phone.trim()) e.phone = 'Phone number is required.';
     else if (!PHONE_RE.test(form.phone)) e.phone = 'Please enter a valid phone number.';
     if (!form.password) e.password = 'Password is required.';
-    else if (form.password.length < 8) e.password = 'Password must be at least 8 characters.';
+    else if (form.password.length < 6) e.password = 'Password must be at least 6 characters.';
     if (!form.confirmPassword) e.confirmPassword = 'Please confirm your password.';
     else if (form.password !== form.confirmPassword) e.confirmPassword = 'Passwords do not match.';
     if (!form.role) e.role = 'Please select your role.';
@@ -88,11 +89,18 @@ function SignUpForm({ onSubmit }) {
     e.preventDefault();
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
-    onSubmit({ type: 'signup', data: form });
+    onSubmit(form);
   };
 
   return (
     <form onSubmit={submit} noValidate aria-label="Sign up form">
+      {serverError && (
+        <div className="alert alert-error" style={{ marginBottom: 16 }}>
+          <AlertCircleIcon size={16} />
+          <span>{serverError}</span>
+        </div>
+      )}
+
       <div className="form-group">
         <label htmlFor="su-name" className="form-label">
           Full Name <span className="required-dot" />
@@ -109,7 +117,6 @@ function SignUpForm({ onSubmit }) {
             onChange={change}
             autoComplete="name"
             aria-invalid={!!errors.fullName}
-            aria-describedby={errors.fullName ? 'su-name-err' : undefined}
           />
         </div>
         <FieldError id="su-name-err" msg={errors.fullName} />
@@ -131,7 +138,6 @@ function SignUpForm({ onSubmit }) {
             onChange={change}
             autoComplete="email"
             aria-invalid={!!errors.email}
-            aria-describedby={errors.email ? 'su-email-err' : undefined}
           />
         </div>
         <FieldError id="su-email-err" msg={errors.email} />
@@ -148,12 +154,11 @@ function SignUpForm({ onSubmit }) {
             name="phone"
             type="tel"
             className={`form-input${errors.phone ? ' input-error' : ''}`}
-            placeholder="+1 (555) 000-0000"
+            placeholder="+91 98765 43210"
             value={form.phone}
             onChange={change}
             autoComplete="tel"
             aria-invalid={!!errors.phone}
-            aria-describedby={errors.phone ? 'su-phone-err' : undefined}
           />
         </div>
         <FieldError id="su-phone-err" msg={errors.phone} />
@@ -168,7 +173,7 @@ function SignUpForm({ onSubmit }) {
           name="password"
           value={form.password}
           onChange={change}
-          placeholder="Min. 8 characters"
+          placeholder="Min. 6 characters"
           error={errors.password}
         />
         <FieldError id="su-password-err" msg={errors.password} />
@@ -198,30 +203,25 @@ function SignUpForm({ onSubmit }) {
             const SelectedIcon = r.Icon;
             const isSelected = form.role === r.id;
             return (
-              <button
+              <div
                 key={r.id}
-                type="button"
                 role="radio"
                 aria-checked={isSelected}
-                className={`role-option${isSelected ? ' selected' : ''}`}
-                onClick={() => {
-                  setForm(f => ({ ...f, role: r.id }));
-                  setErrors(er => ({ ...er, role: '' }));
-                }}
+                tabIndex={0}
+                className={`role-card${isSelected ? ' selected' : ''}`}
+                onClick={() => setForm(f => ({ ...f, role: r.id }))}
+                onKeyDown={e => (e.key === ' ' || e.key === 'Enter') && setForm(f => ({ ...f, role: r.id }))}
               >
-                <div className="role-option__icon">
-                  <SelectedIcon size={18} />
-                </div>
-                <span>{r.label}</span>
-              </button>
+                <div className="role-card-icon"><SelectedIcon size={20} /></div>
+                <span className="role-card-label">{r.label}</span>
+              </div>
             );
           })}
         </div>
-        <FieldError id="su-role-err" msg={errors.role} />
       </div>
 
-      <button id="signup-submit" type="submit" className="btn btn-primary" style={{ marginTop: 8 }}>
-        <span>Continue</span>
+      <button id="signup-submit" type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: 8 }} disabled={loading}>
+        <span>{loading ? 'Sending Verification Code...' : 'Continue to Verification'}</span>
         <ArrowRightIcon size={16} />
       </button>
     </form>
@@ -229,7 +229,7 @@ function SignUpForm({ onSubmit }) {
 }
 
 /* ── Login Form ───────────────────────────────────── */
-function LoginForm({ onSubmit }) {
+function LoginForm({ onSubmit, loading, serverError, onDemoLogin, demoMode }) {
   const [form, setForm] = useState({ identifier: '', password: '' });
   const [errors, setErrors] = useState({});
 
@@ -242,7 +242,7 @@ function LoginForm({ onSubmit }) {
   const validate = () => {
     const e = {};
     if (!form.identifier.trim()) e.identifier = 'Email or phone is required.';
-    if (!form.password) e.password = 'Password is required.';
+    if (!demoMode && !form.password) e.password = 'Password is required.';
     return e;
   };
 
@@ -250,11 +250,18 @@ function LoginForm({ onSubmit }) {
     e.preventDefault();
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
-    onSubmit({ type: 'login', data: form });
+    onSubmit(form);
   };
 
   return (
     <form onSubmit={submit} noValidate aria-label="Login form">
+      {serverError && (
+        <div className="alert alert-error" style={{ marginBottom: 16 }}>
+          <AlertCircleIcon size={16} />
+          <span>{serverError}</span>
+        </div>
+      )}
+
       <div className="form-group">
         <label htmlFor="li-identifier" className="form-label">
           Email or Phone <span className="required-dot" />
@@ -266,12 +273,11 @@ function LoginForm({ onSubmit }) {
             name="identifier"
             type="text"
             className={`form-input${errors.identifier ? ' input-error' : ''}`}
-            placeholder="name@example.com or +1 555..."
+            placeholder="himanshu@paruluniversity.ac.in"
             value={form.identifier}
             onChange={change}
             autoComplete="username"
             aria-invalid={!!errors.identifier}
-            aria-describedby={errors.identifier ? 'li-id-err' : undefined}
           />
         </div>
         <FieldError id="li-id-err" msg={errors.identifier} />
@@ -279,113 +285,154 @@ function LoginForm({ onSubmit }) {
 
       <div className="form-group">
         <label htmlFor="li-password" className="form-label">
-          Password <span className="required-dot" />
+          Password {demoMode ? '(Optional in Demo Mode)' : <span className="required-dot" />}
         </label>
         <PasswordInput
           id="li-password"
           name="password"
           value={form.password}
           onChange={change}
-          placeholder="Your password"
+          placeholder="Enter password"
           error={errors.password}
         />
         <FieldError id="li-pw-err" msg={errors.password} />
       </div>
 
-      <div className="forgot-link">
-        <a href="#forgot" onClick={e => { e.preventDefault(); alert('Password reset email sent!'); }}>
-          Forgot password?
-        </a>
-      </div>
-
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
-        <button id="login-submit" type="submit" className="btn btn-primary" style={{ width: '100%' }}>
-          <span>Log In</span>
+        <button id="login-submit" type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={loading}>
+          <span>{loading ? 'Sending Code...' : 'Log In & Verify'}</span>
           <ArrowRightIcon size={16} />
         </button>
 
-        <button
-          type="button"
-          className="btn btn-secondary btn-sm"
-          style={{ width: '100%' }}
-          onClick={() => {
-            onSubmit({
-              type: 'login',
-              data: {
-                fullName: 'Himanshu Patel',
-                email: 'himanshu@paruluniversity.ac.in',
-                identifier: 'himanshu@paruluniversity.ac.in',
-                role: 'patient'
-              }
-            });
-          }}
-        >
-          <span>Use Demo Account (Himanshu Patel)</span>
-        </button>
+        {demoMode && (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            style={{ width: '100%' }}
+            onClick={onDemoLogin}
+            disabled={loading}
+          >
+            <span>Quick Login: Himanshu Patel (Demo)</span>
+          </button>
+        )}
       </div>
     </form>
   );
 }
 
 /* ── Auth Screen ──────────────────────────────────── */
-export default function AuthScreen({ onComplete, onSkipToDashboard }) {
+export default function AuthScreen({ onComplete, sessionExpiredMessage, onClearSessionExpiredMessage }) {
   const [mode, setMode] = useState('login');
+  const [loading, setLoading] = useState(false);
+  const [serverError, setServerError] = useState('');
+  const [config, setConfig] = useState({ demo_mode: true });
 
-  const handleSubmit = (payload) => {
-    onComplete(payload);
+  useEffect(() => {
+    api.getConfig().then(cfg => {
+      if (cfg) setConfig(cfg);
+    });
+  }, []);
+
+  const handleSignUpSubmit = async (formData) => {
+    if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
+    setLoading(true);
+    setServerError('');
+    try {
+      const res = await api.register(formData);
+      setLoading(false);
+      onComplete({
+        type: 'signup',
+        email: res.email || formData.email,
+        data: formData
+      });
+    } catch (err) {
+      setLoading(false);
+      setServerError(err.message || 'Registration failed. Please try again.');
+    }
+  };
+
+  const handleLoginSubmit = async (formData) => {
+    if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
+    setLoading(true);
+    setServerError('');
+    try {
+      const res = await api.login(formData);
+      setLoading(false);
+      onComplete({
+        type: 'login',
+        email: res.email || formData.identifier,
+        data: formData
+      });
+    } catch (err) {
+      setLoading(false);
+      setServerError(err.message || 'Login failed. Please check your credentials.');
+    }
+  };
+
+  const handleDemoLogin = async () => {
+    if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
+    setLoading(true);
+    setServerError('');
+    try {
+      const res = await api.login({
+        identifier: 'himanshu@paruluniversity.ac.in',
+        password: 'DemoPassword123!'
+      });
+      setLoading(false);
+      onComplete({
+        type: 'login',
+        email: res.email || 'himanshu@paruluniversity.ac.in',
+        data: {
+          fullName: 'Himanshu Patel',
+          email: 'himanshu@paruluniversity.ac.in',
+          role: 'patient'
+        }
+      });
+    } catch (err) {
+      setLoading(false);
+      setServerError(err.message || 'Demo login failed.');
+    }
   };
 
   return (
     <main className="page" id="auth-screen">
       <div className="auth-split">
-        {/* Left preview panel (desktop) */}
         <div className="auth-panel-preview" aria-hidden="true">
           <div className="preview-logo-hero">
-            <img
-              src={`${import.meta.env.BASE_URL}logo.png`}
-              alt="MedRemind"
-              width={80}
-              height={80}
-            />
+            <img src={`${import.meta.env.BASE_URL}logo.png`} alt="MedRemind" width={80} height={80} />
             <h2>Smart Medication<br />Reminder</h2>
-            <p>Your personal assistant for timely medication management.</p>
+            <p>Clinical regimen adherence with two-step secure verification.</p>
           </div>
-
-          <div className="preview-mockup">
-            <img
-              src={`${import.meta.env.BASE_URL}mockup.png`}
-              alt="App screens preview"
-            />
-          </div>
-
           <div className="preview-features">
             {[
-              { Icon: PillIcon, text: 'Simple 3-step setup process' },
-              { Icon: BellIcon, text: 'Customizable dose reminders' },
-              { Icon: BarChart2Icon, text: 'Track adherence and care records' },
+              { Icon: PillIcon, text: 'Two-factor verified medication access' },
+              { Icon: BellIcon, text: 'Customizable dose alarms & sirens' },
+              { Icon: BarChart2Icon, text: 'Adherence tracking and caregiver sync' },
             ].map(({ Icon, text }) => (
               <div key={text} className="preview-feature">
-                <div className="preview-feature-icon">
-                  <Icon size={16} />
-                </div>
+                <div className="preview-feature-icon"><Icon size={16} /></div>
                 <span className="preview-feature-text">{text}</span>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Right form panel */}
         <div className="auth-panel-form">
           <div className="card">
             <ProgressBar currentStep={1} />
 
-            <h1 className="screen-title">
-              {mode === 'login' ? 'Welcome back' : 'Create your account'}
-            </h1>
+            {sessionExpiredMessage && (
+              <div className="alert alert-warning" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }} role="alert">
+                <AlertCircleIcon size={18} />
+                <span>{sessionExpiredMessage}</span>
+              </div>
+            )}
+
+            <h1 className="screen-title">{mode === 'login' ? 'Sign In' : 'Create Account'}</h1>
             <p className="screen-subtitle">
               {mode === 'login'
-                ? 'Sign in to access your medication reminders.'
-                : 'Set up your MedRemind account to get started.'}
+                ? 'Enter your credentials to receive your two-factor verification code.'
+                : 'Register your profile to set up your medication schedule.'}
             </p>
 
             <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
@@ -394,7 +441,7 @@ export default function AuthScreen({ onComplete, onSkipToDashboard }) {
                 role="tab"
                 aria-selected={mode === 'login'}
                 className={`auth-tab${mode === 'login' ? ' active' : ''}`}
-                onClick={() => setMode('login')}
+                onClick={() => { setMode('login'); setServerError(''); }}
               >
                 Login
               </button>
@@ -403,29 +450,26 @@ export default function AuthScreen({ onComplete, onSkipToDashboard }) {
                 role="tab"
                 aria-selected={mode === 'signup'}
                 className={`auth-tab${mode === 'signup' ? ' active' : ''}`}
-                onClick={() => setMode('signup')}
+                onClick={() => { setMode('signup'); setServerError(''); }}
               >
                 Sign Up
               </button>
             </div>
 
             {mode === 'login' ? (
-              <LoginForm onSubmit={handleSubmit} />
+              <LoginForm
+                onSubmit={handleLoginSubmit}
+                loading={loading}
+                serverError={serverError}
+                onDemoLogin={handleDemoLogin}
+                demoMode={config.demo_mode}
+              />
             ) : (
-              <SignUpForm onSubmit={handleSubmit} />
-            )}
-
-            {onSkipToDashboard && (
-              <div style={{ marginTop: 16, textAlign: 'center', borderTop: '1px solid var(--color-border)', paddingTop: 12 }}>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm text-primary"
-                  onClick={onSkipToDashboard}
-                  style={{ fontWeight: 600 }}
-                >
-                  <span>Skip to Full Dashboard (Demo Mode) →</span>
-                </button>
-              </div>
+              <SignUpForm
+                onSubmit={handleSignUpSubmit}
+                loading={loading}
+                serverError={serverError}
+              />
             )}
           </div>
         </div>

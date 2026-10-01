@@ -3,7 +3,7 @@ import {
   PillIcon, ClockIcon, CheckCircleIcon, AlertTriangleIcon,
   RepeatIcon, PlusIcon, SearchIcon, Trash2Icon, FileTextIcon,
   BotIcon, SparklesIcon, SendIcon, UsersIcon,
-  StethoscopeIcon, BarChart2Icon, CheckIcon
+  StethoscopeIcon, BarChart2Icon, CheckIcon, LogOutIcon
 } from '../components/Icons';
 import AddMedicineModal from '../components/AddMedicineModal';
 import { api, getUserDisplayName, getUserKey, isDemoUser } from '../services/api';
@@ -38,7 +38,8 @@ export default function DashboardScreen({
   authData,
   currentRole,
   onOpenSos,
-  onTriggerAlarm
+  onTriggerAlarm,
+  onLogout
 }) {
   const userName = getUserDisplayName(authData);
   const userKey = getUserKey(authData);
@@ -1657,6 +1658,20 @@ export default function DashboardScreen({
           <span className="footer-dot">•</span>
           <span>Parul University (Guided by Prof. Sathwik Chebrolu)</span>
         </div>
+        {onLogout && (
+          <div className="footer-logout-row">
+            <span className="footer-user-tag">Signed in as <strong>{userName}</strong> ({currentRole})</span>
+            <button
+              type="button"
+              className="btn btn-outline-danger btn-xs footer-logout-btn"
+              onClick={onLogout}
+              title="Log out of account"
+            >
+              <LogOutIcon size={13} />
+              <span>Log out</span>
+            </button>
+          </div>
+        )}
       </footer>
     </div>
   );

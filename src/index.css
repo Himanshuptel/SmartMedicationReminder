@@ -126,7 +126,10 @@
 
 html, body {
   width: 100%;
+  max-width: 100vw;
   min-height: 100%;
+  overflow-x: hidden;
+  box-sizing: border-box;
   font-family: var(--font-sans);
   background: var(--color-bg);
   color: var(--color-text-1);
@@ -138,9 +141,24 @@ html, body {
 }
 
 #root {
+  width: 100%;
+  max-width: 100vw;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+.app-shell {
+  width: 100%;
+  max-width: 100vw;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 a {
@@ -174,6 +192,9 @@ p {
 
 /* ── Header & Top Navigation Bar ────────────────────────────── */
 .top-bar {
+  width: 100%;
+  max-width: 100vw;
+  box-sizing: border-box;
   height: 64px;
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
@@ -231,6 +252,15 @@ p {
   border-radius: var(--radius-full);
   padding: 3px 4px;
   gap: 2px;
+}
+
+.demo-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-primary);
+  font-weight: 700;
+  padding: 0 4px;
 }
 
 .role-btn {
@@ -478,6 +508,105 @@ p {
   word-break: break-word !important;
 }
 
+/* ── Profile Dropdown Menu (Mobile & Desktop) ─────────────── */
+.profile-menu-wrapper {
+  position: relative !important;
+  display: inline-flex !important;
+  align-items: center !important;
+}
+
+.profile-dropdown {
+  position: absolute !important;
+  top: calc(100% + 8px) !important;
+  right: 0 !important;
+  width: 250px !important;
+  max-width: calc(100vw - 20px) !important;
+  background: var(--color-surface) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: var(--radius-lg) !important;
+  box-shadow: 0 16px 40px -6px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+  z-index: 1000 !important;
+  overflow: hidden !important;
+  animation: slideUp var(--dur-fast) var(--ease-std) both !important;
+  padding: 8px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 4px !important;
+}
+
+.profile-dropdown-user {
+  display: flex !important;
+  align-items: center !important;
+  gap: 12px !important;
+  padding: 10px 12px !important;
+  background: var(--color-surface-2) !important;
+  border-radius: var(--radius-md) !important;
+}
+
+.profile-avatar-lg {
+  width: 36px !important;
+  height: 36px !important;
+  font-size: 0.95rem !important;
+  flex-shrink: 0 !important;
+}
+
+.profile-user-info {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  overflow: hidden !important;
+}
+
+.profile-user-name {
+  font-size: 0.88rem !important;
+  font-weight: 700 !important;
+  color: var(--color-text-1) !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.profile-user-role {
+  font-size: 0.65rem !important;
+  font-weight: 800 !important;
+  color: var(--color-primary) !important;
+  letter-spacing: 0.5px !important;
+}
+
+.profile-dropdown-divider {
+  height: 1px !important;
+  background: var(--color-border) !important;
+  margin: 4px 0 !important;
+}
+
+.profile-menu-item {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+  width: 100% !important;
+  padding: 10px 12px !important;
+  border-radius: var(--radius-md) !important;
+  border: none !important;
+  background: transparent !important;
+  color: var(--color-text-1) !important;
+  font-size: 0.84rem !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  text-align: left !important;
+  transition: all var(--dur-fast) var(--ease-std) !important;
+}
+
+.profile-menu-item:hover {
+  background: var(--color-surface-2) !important;
+}
+
+.profile-menu-item.profile-logout-item {
+  color: var(--color-error) !important;
+}
+
+.profile-menu-item.profile-logout-item:hover {
+  background: var(--color-error-soft) !important;
+}
 
 /* Auth Top Bar (Clean, distraction-free header on sign-in) */
 .auth-top-bar {
@@ -2582,6 +2711,34 @@ p {
   color: var(--color-border-strong);
 }
 
+.footer-logout-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+
+.footer-user-tag {
+  font-size: 0.8rem;
+  color: var(--color-text-2);
+}
+
+.footer-user-tag strong {
+  color: var(--color-text-1);
+}
+
+.footer-logout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+}
+
 .ai-hub-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3201,57 +3358,407 @@ p {
 
 /* ── Responsive Mobile Optimizations ────────────────────────── */
 @media (max-width: 860px) {
+  .auth-panel-preview {
+    display: none !important;
+  }
+
   .auth-split {
     flex-direction: column;
     align-items: center;
-    gap: 24px;
-  }
-  
-  .auth-panel-preview {
-    max-width: 100%;
-    padding: 24px 20px;
+    gap: 0;
+    width: 100%;
+    max-width: 440px;
+    margin: 0 auto;
   }
   
   .auth-panel-form {
+    width: 100%;
     max-width: 100%;
   }
 
+  .page#auth-screen {
+    padding: 8px 12px 16px 12px !important;
+    min-height: calc(100dvh - 56px) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
   .top-bar {
-    padding: 0 16px;
+    padding: 0 14px;
+    gap: 8px;
   }
 
-  .dashboard-page {
-    padding: 20px 14px 48px 14px;
+  .top-bar__left {
+    gap: 12px;
   }
 
-  .hero-greeting {
-    flex-direction: column;
-    align-items: flex-start;
+  .top-bar__actions, .top-bar__right {
+    gap: 8px !important;
+  }
+
+  .dashboard-page, .dashboard-container {
+    padding: 20px 16px 48px 16px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
   }
 }
 
-@media (max-width: 480px) {
+@media (max-width: 768px) {
+  /* TopBar compact mobile layout */
+  .top-bar {
+    padding: 0 12px !important;
+    height: 60px !important;
+  }
+
+  .test-alarm-btn {
+    display: none !important;
+  }
+
+  .demo-switch-topbar-btn {
+    display: none !important;
+  }
+
+  .demo-badge {
+    display: none !important;
+  }
+
+  .system-design-btn span {
+    display: none !important;
+  }
+
+  .system-design-btn {
+    padding: 7px 10px !important;
+    min-width: 36px !important;
+    height: 36px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  .user-profile-badge {
+    padding: 2px !important;
+    border: none !important;
+    background: transparent !important;
+  }
+
+  .user-name {
+    display: none !important;
+  }
+
+  .demo-label {
+    display: none !important;
+  }
+
+  .role-locked-badge {
+    padding: 4px 8px !important;
+    font-size: 0.72rem !important;
+    gap: 4px !important;
+  }
+
+  .role-locked-badge .role-badge-text {
+    max-width: 70px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .sos-topbar-btn {
+    padding: 4px 8px !important;
+    height: 34px !important;
+    font-size: 0.75rem !important;
+  }
+
+  .logout-topbar-btn {
+    padding: 4px 6px !important;
+    font-size: 0.72rem !important;
+  }
+
+  /* Dashboard Header Mobile */
+  .hero-greeting, .dashboard-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 14px !important;
+    margin-bottom: 20px !important;
+  }
+
+  .dashboard-header-text {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .hero-title, .dashboard-title {
+    font-size: 1.6rem !important;
+    word-break: break-word !important;
+    line-height: 1.25 !important;
+  }
+
+  .dashboard-header-actions {
+    width: 100% !important;
+    display: flex !important;
+    gap: 10px !important;
+  }
+
+  .dashboard-header-actions .btn {
+    flex: 1 !important;
+    justify-content: center !important;
+    padding: 10px 14px !important;
+    font-size: 0.88rem !important;
+  }
+
+  /* Navigation Tabs */
+  .dashboard-nav-tabs {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 4px !important;
+    gap: 4px !important;
+    margin-bottom: 20px !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    flex-wrap: nowrap !important;
+    box-sizing: border-box !important;
+  }
+
+  .tab-btn {
+    padding: 8px 12px !important;
+    font-size: 0.8rem !important;
+    flex-shrink: 0 !important;
+  }
+
+  /* Next Dose Banner */
+  .next-dose-banner {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    padding: 18px 16px !important;
+    gap: 14px !important;
+  }
+
+  .next-dose-banner .btn {
+    width: 100% !important;
+    justify-content: center !important;
+  }
+
+  /* Caregiver Banner */
+  .caregiver-banner {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    padding: 18px 16px !important;
+    gap: 14px !important;
+  }
+
+  /* Catalog Toolbar */
+  .catalog-toolbar {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+  }
+
+  .search-box {
+    min-width: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+}
+
+@media (max-width: 580px) {
+  /* TopBar on narrow mobile screens */
+  .top-bar {
+    padding: 0 8px !important;
+    height: 56px !important;
+  }
+
+  .top-bar__left {
+    gap: 6px !important;
+    min-width: 0 !important;
+  }
+
+  .top-bar__logo {
+    gap: 6px !important;
+    font-size: 1rem !important;
+  }
+
+  .top-bar__logo img {
+    width: 24px !important;
+    height: 24px !important;
+  }
+
+  .logo-text {
+    font-size: 0.98rem !important;
+  }
+
+  .top-bar__actions, .top-bar__right {
+    gap: 4px !important;
+  }
+
+  .role-switcher {
+    padding: 2px !important;
+    gap: 2px !important;
+  }
+
+  .role-locked-badge {
+    padding: 4px 6px !important;
+  }
+
+  .role-locked-badge .role-badge-text {
+    display: none !important;
+  }
+
+  .role-btn {
+    padding: 4px 6px !important;
+    min-width: 28px !important;
+    height: 28px !important;
+    justify-content: center !important;
+  }
+
+  .role-btn .role-btn-text {
+    display: none !important;
+  }
+
+  .system-design-btn {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    padding: 0 !important;
+  }
+
+  .sos-topbar-btn {
+    padding: 3px 6px !important;
+    height: 32px !important;
+    font-size: 0.72rem !important;
+    gap: 4px !important;
+  }
+
+  .icon-btn {
+    width: 32px !important;
+    height: 32px !important;
+  }
+
+  .user-avatar {
+    width: 26px !important;
+    height: 26px !important;
+    font-size: 0.72rem !important;
+  }
+
+  .logout-topbar-btn {
+    display: none !important;
+  }
+
+  .auth-brand-tag {
+    display: none !important;
+  }
+
+  /* 2x2 Stats Grid for Mobile Devices */
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 10px !important;
+    margin-bottom: 20px !important;
+  }
+
+  .stat-card {
+    padding: 14px 12px !important;
+  }
+
+  .stat-label {
+    font-size: 0.72rem !important;
+    margin-bottom: 4px !important;
+  }
+
+  .stat-number {
+    font-size: 1.45rem !important;
+    margin-bottom: 2px !important;
+  }
+
+  .stat-sub {
+    font-size: 0.68rem !important;
+  }
+
+  /* Schedule and Dose Cards */
+  .dose-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .meds-grid, .med-catalog-grid {
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .portal-grid, .patient-card-grid {
+    grid-template-columns: 1fr !important;
+    gap: 14px !important;
+  }
+
+  .dose-card {
+    padding: 14px 14px !important;
+  }
+
+  .dose-actions {
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+  }
+
+  .dose-actions .btn {
+    flex: 1 !important;
+    min-width: 90px !important;
+    justify-content: center !important;
+    font-size: 0.8rem !important;
+  }
+
+  .dashboard-page, .dashboard-container {
+    padding: 14px 12px 48px 12px !important;
+  }
+}
+
+@media (max-width: 440px) {
+  /* Exact iPhone 16 Pro Max / Compact Mobile viewports */
+  .hero-title, .dashboard-title {
+    font-size: 1.35rem !important;
+  }
+
+  .dashboard-eyebrow {
+    font-size: 0.72rem !important;
+    padding: 3px 8px !important;
+  }
+
   .auth-panel-preview {
-    display: none; /* Hide preview on small mobile screens to keep sign-in fast and clean */
+    display: none !important;
   }
 
   .card {
-    padding: 24px 18px;
-    border-radius: var(--radius-lg);
+    padding: 20px 14px !important;
+    border-radius: var(--radius-md) !important;
   }
 
   .otp-cell, .otp-digit {
-    width: 40px;
-    height: 48px;
-    font-size: 1.3rem;
+    width: 38px !important;
+    height: 46px !important;
+    font-size: 1.2rem !important;
   }
 
   .role-grid, .role-selector {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr !important;
   }
 
   .form-row-2 {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr !important;
+  }
+
+  .week-grid {
+    gap: 4px !important;
+  }
+
+  .week-day-cell {
+    padding: 8px 2px !important;
+    font-size: 0.68rem !important;
+  }
+
+  .schedule-card {
+    padding: 18px 12px !important;
+  }
+
+  .time-slot {
+    padding-left: 12px !important;
   }
 }
 

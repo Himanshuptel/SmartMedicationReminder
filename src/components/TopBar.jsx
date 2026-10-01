@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   SunIcon, MoonIcon, ShieldIcon, UsersIcon, StethoscopeIcon,
-  BellIcon, AlertTriangleIcon, DiagramIcon, CheckIcon, PillIcon
+  BellIcon, AlertTriangleIcon, DiagramIcon, CheckIcon, PillIcon, LogOutIcon
 } from './Icons';
 
 export default function TopBar({
@@ -22,7 +22,9 @@ export default function TopBar({
   isAuthenticated
 }) {
   const [showNotifs, setShowNotifs] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const notifRef = useRef(null);
+  const profileRef = useRef(null);
 
   const unreadCount = notifications.filter(n => n.status === 'unread').length;
 
@@ -31,14 +33,17 @@ export default function TopBar({
       if (notifRef.current && !notifRef.current.contains(event.target)) {
         setShowNotifs(false);
       }
+      if (profileRef.current && !profileRef.current.contains(event.target)) {
+        setShowProfileMenu(false);
+      }
     }
-    if (showNotifs) {
+    if (showNotifs || showProfileMenu) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showNotifs]);
+  }, [showNotifs, showProfileMenu]);
 
   const isAuthScreen = currentScreen === 'auth' || currentScreen === 'otp' || !isAuthenticated;
 
@@ -65,7 +70,7 @@ export default function TopBar({
         <div className="top-bar__right">
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
+            className="btn btn-ghost btn-sm system-design-btn"
             onClick={onOpenSystemDesign}
             title="View system design & architecture specifications"
           >
@@ -106,7 +111,7 @@ export default function TopBar({
         {/* If Faculty Demo Mode: show role switcher with label. Otherwise, show strictly locked role badge! */}
         {isDemo ? (
           <div className="role-switcher" role="group" aria-label="Faculty demo role switcher">
-            <span style={{ fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--color-primary)', fontWeight: 700, padding: '0 4px' }}>
+            <span className="demo-label">
               Demo:
             </span>
             <button
@@ -116,7 +121,7 @@ export default function TopBar({
               title="Switch to Patient View"
             >
               <ShieldIcon size={14} />
-              <span>Patient</span>
+              <span className="role-btn-text">Patient</span>
             </button>
             <button
               type="button"
@@ -125,7 +130,7 @@ export default function TopBar({
               title="Switch to Caregiver Portal"
             >
               <UsersIcon size={14} />
-              <span>Caregiver</span>
+              <span className="role-btn-text">Caregiver</span>
             </button>
             <button
               type="button"
@@ -134,14 +139,14 @@ export default function TopBar({
               title="Switch to Clinician Portal"
             >
               <StethoscopeIcon size={14} />
-              <span>Clinician</span>
+              <span className="role-btn-text">Clinician</span>
             </button>
           </div>
         ) : (
-          <div className="role-locked-badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 'var(--radius-full)', background: 'var(--color-surface-2)', border: '1px solid var(--color-border)', fontSize: '0.75rem', fontWeight: 600 }}>
-            {currentRole === 'clinician' && <><StethoscopeIcon size={14} color="var(--color-primary)" /><span>Clinician Workstation</span></>}
-            {currentRole === 'caregiver' && <><UsersIcon size={14} color="var(--color-accent)" /><span>Caregiver Station</span></>}
-            {currentRole === 'patient' && <><ShieldIcon size={14} color="var(--color-primary)" /><span>Patient Portal</span></>}
+          <div className="role-locked-badge">
+            {currentRole === 'clinician' && <><StethoscopeIcon size={14} color="var(--color-primary)" /><span className="role-badge-text">Clinician Workstation</span></>}
+            {currentRole === 'caregiver' && <><UsersIcon size={14} color="var(--color-accent)" /><span className="role-badge-text">Caregiver Station</span></>}
+            {currentRole === 'patient' && <><ShieldIcon size={14} color="var(--color-primary)" /><span className="role-badge-text">Patient Portal</span></>}
           </div>
         )}
       </div>
@@ -163,7 +168,7 @@ export default function TopBar({
         {/* System Design Architecture Button */}
         <button
           type="button"
-          className="btn btn-outline-secondary btn-sm"
+          className="btn btn-outline-secondary btn-sm system-design-btn"
           onClick={onOpenSystemDesign}
           title="View UML diagrams & system architecture"
         >
@@ -234,32 +239,96 @@ export default function TopBar({
         {!isDemo ? (
           <button
             type="button"
-            className="btn btn-outline-primary btn-xs"
+            className="btn btn-outline-primary btn-xs demo-switch-topbar-btn"
             onClick={onSwitchToDemo}
             title="Switch to Demo Account with full pre-loaded medications"
           >
             <span>Switch to Demo (Himanshu)</span>
           </button>
         ) : (
-          <span className="badge" style={{ background: 'var(--color-primary-soft)', color: 'var(--color-primary)', fontSize: '0.7rem', padding: '3px 8px' }}>
+          <span className="badge demo-badge" style={{ background: 'var(--color-primary-soft)', color: 'var(--color-primary)', fontSize: '0.7rem', padding: '3px 8px' }}>
             Demo Account
           </span>
         )}
 
-        {/* Active User Pill */}
-        <div className="user-profile-badge">
-          <div className="user-avatar">{userName.charAt(0).toUpperCase()}</div>
-          <span className="user-name">{userName}</span>
+        {/* Active User Pill with Interactive Profile & Logout Dropdown */}
+        <div className="profile-menu-wrapper" ref={profileRef}>
+          <button
+            type="button"
+            className="user-profile-badge"
+            onClick={() => setShowProfileMenu(s => !s)}
+            aria-expanded={showProfileMenu}
+            aria-label="User account and profile menu"
+            title={`${userName} (${currentRole}) — Tap for account options & logout`}
+          >
+            <div className="user-avatar">{userName.charAt(0).toUpperCase()}</div>
+            <span className="user-name">{userName}</span>
+          </button>
+
+          {showProfileMenu && (
+            <div className="profile-dropdown" role="menu">
+              <div className="profile-dropdown-user">
+                <div className="user-avatar profile-avatar-lg">{userName.charAt(0).toUpperCase()}</div>
+                <div className="profile-user-info">
+                  <strong className="profile-user-name">{userName}</strong>
+                  <span className="profile-user-role">{currentRole.toUpperCase()}</span>
+                </div>
+              </div>
+
+              <div className="profile-dropdown-divider" />
+
+              {!isDemo ? (
+                <button
+                  type="button"
+                  className="profile-menu-item"
+                  onClick={() => {
+                    setShowProfileMenu(false);
+                    onSwitchToDemo();
+                  }}
+                >
+                  <UsersIcon size={16} />
+                  <span>Switch to Demo Account</span>
+                </button>
+              ) : null}
+
+              <button
+                type="button"
+                className="profile-menu-item"
+                onClick={() => {
+                  setShowProfileMenu(false);
+                  onOpenSystemDesign();
+                }}
+              >
+                <DiagramIcon size={16} />
+                <span>Architecture Specs</span>
+              </button>
+
+              <div className="profile-dropdown-divider" />
+
+              <button
+                type="button"
+                className="profile-menu-item profile-logout-item text-danger"
+                onClick={() => {
+                  setShowProfileMenu(false);
+                  onLogout();
+                }}
+              >
+                <LogOutIcon size={16} color="var(--color-error)" />
+                <strong>Log Out</strong>
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Explicit Logout Button */}
+        {/* Explicit Logout Button for Desktop */}
         <button
           type="button"
-          className="btn btn-ghost btn-xs text-danger"
+          className="btn btn-ghost btn-xs text-danger logout-topbar-btn"
           onClick={onLogout}
           title="Log out and return to Login screen"
           style={{ fontWeight: 600 }}
         >
+          <LogOutIcon size={13} color="currentColor" />
           <span>Log out</span>
         </button>
       </div>

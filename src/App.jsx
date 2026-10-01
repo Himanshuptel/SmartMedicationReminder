@@ -357,6 +357,7 @@ export default function App() {
           currentRole={currentRole}
           onOpenSos={() => setSosOpen(true)}
           onTriggerAlarm={handleTriggerTestAlarm}
+          onLogout={handleLogout}
         />
       )}
 

@@ -46,3 +46,9 @@ venv/
 *.sln
 *.sw?
 .~lock.*
+
+# Local-only commit automation & test scripts
+commit_as.py
+scripts/
+tests/
+

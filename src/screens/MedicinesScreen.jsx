@@ -388,34 +388,36 @@ export default function MedicinesScreen({ authData, onComplete }) {
             ))}
           </div>
 
-          <button
-            type="button"
-            className="add-more-btn"
-            onClick={handleAddMore}
-            id="add-more-medicine"
-          >
-            <PlusIcon size={16} />
-            <span>Add another medicine</span>
-          </button>
+          <div className="med-form-actions">
+            <button
+              type="button"
+              className="add-more-btn"
+              onClick={handleAddMore}
+              id="add-more-medicine"
+            >
+              <PlusIcon size={16} />
+              <span>Add another medicine</span>
+            </button>
 
-          <button
-            id="save-medicines"
-            type="submit"
-            className="btn btn-primary"
-            disabled={submitting}
-          >
-            {submitting ? (
-              <>
-                <span className="spinner" />
-                <span>Saving entries...</span>
-              </>
-            ) : (
-              <>
-                <span>Save &amp; Continue</span>
-                <ArrowRightIcon size={16} />
-              </>
-            )}
-          </button>
+            <button
+              id="save-medicines"
+              type="submit"
+              className="btn btn-primary"
+              disabled={submitting}
+            >
+              {submitting ? (
+                <>
+                  <span className="spinner" />
+                  <span>Saving entries...</span>
+                </>
+              ) : (
+                <>
+                  <span>Save &amp; Continue</span>
+                  <ArrowRightIcon size={16} />
+                </>
+              )}
+            </button>
+          </div>
         </form>
       </div>
 

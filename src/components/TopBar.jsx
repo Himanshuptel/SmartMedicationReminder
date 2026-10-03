@@ -16,9 +16,7 @@ export default function TopBar({
   userName = 'Himanshu Patel',
   currentScreen,
   onOpenAuth,
-  onSwitchToDemo,
   onLogout,
-  isDemo,
   isAuthenticated
 }) {
   const [showNotifs, setShowNotifs] = useState(false);
@@ -108,47 +106,11 @@ export default function TopBar({
           <span className="logo-text">MedRemind</span>
         </a>
 
-        {/* If Faculty Demo Mode: show role switcher with label. Otherwise, show strictly locked role badge! */}
-        {isDemo ? (
-          <div className="role-switcher" role="group" aria-label="Faculty demo role switcher">
-            <span className="demo-label">
-              Demo:
-            </span>
-            <button
-              type="button"
-              className={`role-btn ${currentRole === 'patient' ? 'active' : ''}`}
-              onClick={() => onRoleChange('patient')}
-              title="Switch to Patient View"
-            >
-              <ShieldIcon size={14} />
-              <span className="role-btn-text">Patient</span>
-            </button>
-            <button
-              type="button"
-              className={`role-btn ${currentRole === 'caregiver' ? 'active' : ''}`}
-              onClick={() => onRoleChange('caregiver')}
-              title="Switch to Caregiver Portal"
-            >
-              <UsersIcon size={14} />
-              <span className="role-btn-text">Caregiver</span>
-            </button>
-            <button
-              type="button"
-              className={`role-btn ${currentRole === 'clinician' ? 'active' : ''}`}
-              onClick={() => onRoleChange('clinician')}
-              title="Switch to Clinician Portal"
-            >
-              <StethoscopeIcon size={14} />
-              <span className="role-btn-text">Clinician</span>
-            </button>
-          </div>
-        ) : (
-          <div className="role-locked-badge">
-            {currentRole === 'clinician' && <><StethoscopeIcon size={14} color="var(--color-primary)" /><span className="role-badge-text">Clinician Workstation</span></>}
-            {currentRole === 'caregiver' && <><UsersIcon size={14} color="var(--color-accent)" /><span className="role-badge-text">Caregiver Station</span></>}
-            {currentRole === 'patient' && <><ShieldIcon size={14} color="var(--color-primary)" /><span className="role-badge-text">Patient Portal</span></>}
-          </div>
-        )}
+        <div className="role-locked-badge">
+          {currentRole === 'clinician' && <><StethoscopeIcon size={14} color="var(--color-primary)" /><span className="role-badge-text">Clinician Workstation</span></>}
+          {currentRole === 'caregiver' && <><UsersIcon size={14} color="var(--color-accent)" /><span className="role-badge-text">Caregiver Station</span></>}
+          {currentRole === 'patient' && <><ShieldIcon size={14} color="var(--color-primary)" /><span className="role-badge-text">Patient Portal</span></>}
+        </div>
       </div>
 
       <div className="top-bar__actions">
@@ -235,22 +197,6 @@ export default function TopBar({
           {darkMode ? <SunIcon size={18} /> : <MoonIcon size={18} />}
         </button>
 
-        {/* Demo Account Switcher Button */}
-        {!isDemo ? (
-          <button
-            type="button"
-            className="btn btn-outline-primary btn-xs demo-switch-topbar-btn"
-            onClick={onSwitchToDemo}
-            title="Switch to Demo Account with full pre-loaded medications"
-          >
-            <span>Switch to Demo (Himanshu)</span>
-          </button>
-        ) : (
-          <span className="badge demo-badge" style={{ background: 'var(--color-primary-soft)', color: 'var(--color-primary)', fontSize: '0.7rem', padding: '3px 8px' }}>
-            Demo Account
-          </span>
-        )}
-
         {/* Active User Pill with Interactive Profile & Logout Dropdown */}
         <div className="profile-menu-wrapper" ref={profileRef}>
           <button
@@ -276,20 +222,6 @@ export default function TopBar({
               </div>
 
               <div className="profile-dropdown-divider" />
-
-              {!isDemo ? (
-                <button
-                  type="button"
-                  className="profile-menu-item"
-                  onClick={() => {
-                    setShowProfileMenu(false);
-                    onSwitchToDemo();
-                  }}
-                >
-                  <UsersIcon size={16} />
-                  <span>Switch to Demo Account</span>
-                </button>
-              ) : null}
 
               <button
                 type="button"

@@ -51,4 +51,5 @@ venv/
 commit_as.py
 scripts/
 tests/
+*.docx
 

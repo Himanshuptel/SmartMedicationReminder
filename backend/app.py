@@ -44,6 +44,7 @@ from flask_cors import CORS
 from database import init_db, get_connection, hash_password, verify_password
 from supabase_sync import (
     is_supabase_enabled,
+    get_supabase_client,
     replicate_user,
     replicate_medicine,
     replicate_dose_instance,
@@ -1062,6 +1063,59 @@ def get_config():
 
 # ── Authentication & OTP Flow ──────────────────────────────────────
 
+@app.route("/api/auth/check-email", methods=["GET", "POST"])
+def auth_check_email():
+    """
+    Verify whether an email address already exists in the system (SQLite local & Supabase Cloud).
+    Used during Registration to prevent duplicate accounts and during Login to detect non-existent accounts.
+    """
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        email = (body.get("email") or "").strip().lower()
+    else:
+        email = (request.args.get("email") or "").strip().lower()
+
+    if not email or "@" not in email:
+        return api_error("A valid email address is required", status_code=422, code="VALIDATION_ERROR")
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, email, role FROM users WHERE LOWER(email) = ?", (email,))
+    user = cursor.fetchone()
+    conn.close()
+
+    if user:
+        return api_success({
+            "exists": True,
+            "email": email,
+            "role": user["role"],
+            "name": user["name"],
+            "source": "local_db"
+        })
+
+    # If not in SQLite, check Supabase Cloud if available
+    if is_supabase_enabled() and not app.testing:
+        client = get_supabase_client()
+        if client:
+            try:
+                res = client.table("users").select("id, email, name, role").ilike("email", email).limit(1).execute()
+                if res.data and len(res.data) > 0:
+                    cloud_user = res.data[0]
+                    return api_success({
+                        "exists": True,
+                        "email": email,
+                        "role": cloud_user.get("role", "patient"),
+                        "name": cloud_user.get("name", ""),
+                        "source": "supabase_cloud"
+                    })
+            except Exception as e:
+                logger.warning("Error checking email in Supabase: %s", e)
+
+    return api_success({
+        "exists": False,
+        "email": email
+    })
+
 @app.route("/api/auth/register", methods=["POST"])
 def auth_register():
     body = request.get_json(silent=True) or {}
@@ -1090,10 +1144,21 @@ def auth_register():
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
+    cursor.execute("SELECT id FROM users WHERE LOWER(email) = ?", (email,))
     if cursor.fetchone():
         conn.close()
-        return api_error("Email is already registered", status_code=409, code="CONFLICT")
+        return api_error("Email is already registered. Please log in.", status_code=409, code="CONFLICT")
+
+    if is_supabase_enabled() and not app.testing:
+        client = get_supabase_client()
+        if client:
+            try:
+                res = client.table("users").select("id").ilike("email", email).limit(1).execute()
+                if res.data and len(res.data) > 0:
+                    conn.close()
+                    return api_error("Email is already registered in our system. Please log in.", status_code=409, code="CONFLICT")
+            except Exception as e:
+                logger.warning("Error checking email in Supabase during register: %s", e)
 
     password_hash = hash_password(password)
     cursor.execute(
@@ -1280,6 +1345,31 @@ def auth_direct_login():
     cursor.execute("SELECT * FROM users WHERE LOWER(email) = ? OR phone = ? OR LOWER(name) = ?", (identifier, identifier, identifier))
     user = cursor.fetchone()
 
+    # If not in SQLite, check Supabase Cloud if available
+    if not user and is_supabase_enabled() and not app.testing:
+        client = get_supabase_client()
+        if client:
+            try:
+                res = client.table("users").select("*").ilike("email", identifier).limit(1).execute()
+                if res.data and len(res.data) > 0:
+                    cloud_user = res.data[0]
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO users (name, email, phone, role, password_hash, timezone)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        cloud_user.get("name") or "User",
+                        cloud_user.get("email"),
+                        cloud_user.get("phone") or "+91 98765 43210",
+                        cloud_user.get("role") or "patient",
+                        cloud_user.get("password_hash") or hash_password("CloudUserFallback123!"),
+                        cloud_user.get("timezone") or "Asia/Kolkata"
+                    ))
+                    conn.commit()
+                    cursor.execute("SELECT * FROM users WHERE LOWER(email) = ?", (identifier,))
+                    user = cursor.fetchone()
+            except Exception as e:
+                logger.warning("Error fetching cloud user during direct login: %s", e)
+
     if not user:
         conn.close()
         return api_error("Account not found. Please check your credentials or create an account.", status_code=404, code="NOT_FOUND")
@@ -1343,6 +1433,17 @@ def auth_direct_register():
     if existing:
         conn.close()
         return api_error("An account with this email already exists. Please log in.", status_code=409, code="CONFLICT")
+
+    if is_supabase_enabled() and not app.testing:
+        client = get_supabase_client()
+        if client:
+            try:
+                res = client.table("users").select("id").ilike("email", email).limit(1).execute()
+                if res.data and len(res.data) > 0:
+                    conn.close()
+                    return api_error("An account with this email already exists in our system. Please log in.", status_code=409, code="CONFLICT")
+            except Exception as e:
+                logger.warning("Error checking email in Supabase during direct register: %s", e)
 
     password_hash = hash_password(password)
     cursor.execute(

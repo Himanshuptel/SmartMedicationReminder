@@ -23,7 +23,6 @@ export default function OtpScreen({ authData, onVerified, onBack }) {
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(COUNTDOWN_SECS);
   const [canResend, setCanResend] = useState(false);
-  const [demoOtp, setDemoOtp] = useState(authData?.demoOtp || authData?.data?.demoOtp || '');
   const [totpQr, setTotpQr] = useState(authData?.totpQr || authData?.data?.totpQr || '');
   const [totpSecret, setTotpSecret] = useState(authData?.totpSecret || authData?.data?.totpSecret || '');
   const [showTotpModal, setShowTotpModal] = useState(false);
@@ -32,9 +31,6 @@ export default function OtpScreen({ authData, onVerified, onBack }) {
   const inputRefs = useRef([]);
 
   useEffect(() => {
-    if (authData?.demoOtp) {
-      setDemoOtp(authData.demoOtp);
-    }
     if (authData?.totpQr) {
       setTotpQr(authData.totpQr);
     }
@@ -42,15 +38,6 @@ export default function OtpScreen({ authData, onVerified, onBack }) {
       setTotpSecret(authData.totpSecret);
     }
   }, [authData]);
-
-  const handleAutoFill = () => {
-    if (!demoOtp) return;
-    const chars = String(demoOtp).slice(0, OTP_LEN).split('');
-    const nextDigits = Array(OTP_LEN).fill('');
-    chars.forEach((c, i) => { nextDigits[i] = c; });
-    setDigits(nextDigits);
-    setError('');
-  };
 
   useEffect(() => {
     if (countdown <= 0) { setCanResend(true); return; }
@@ -133,9 +120,6 @@ export default function OtpScreen({ authData, onVerified, onBack }) {
       setDigits(Array(OTP_LEN).fill(''));
       setCountdown(COUNTDOWN_SECS);
       setCanResend(false);
-      if (res?.demo_otp) {
-        setDemoOtp(res.demo_otp);
-      }
       if (res?.totp_qr) {
         setTotpQr(res.totp_qr);
       }
@@ -173,19 +157,6 @@ export default function OtpScreen({ authData, onVerified, onBack }) {
     }
   };
 
-  const handleSkipOtp = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const res = await api.skipOtp({ email: contactEmail });
-      setLoading(false);
-      onVerified(res.user, res.token);
-    } catch (err) {
-      setLoading(false);
-      setError(err.message || 'Instant verification failed.');
-    }
-  };
-
   const hasError = !!error;
 
   return (
@@ -207,22 +178,6 @@ export default function OtpScreen({ authData, onVerified, onBack }) {
           <span>Verification code sent to</span>
           <strong>{maskedContact}</strong>
         </div>
-
-        {demoOtp && (
-          <div className="alert alert-info" style={{ marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div>
-              <span style={{ fontSize: '0.85rem' }}>Demo Mode Verification Code: </span>
-              <strong style={{ fontSize: '1.1rem', letterSpacing: '2px', marginLeft: 4 }}>{demoOtp}</strong>
-            </div>
-            <button
-              type="button"
-              className="btn btn-outline-primary btn-xs"
-              onClick={handleAutoFill}
-            >
-              Auto-fill Code
-            </button>
-          </div>
-        )}
 
         {/* 📱 Free Google Authenticator (TOTP MFA) Integration */}
         <div style={{
@@ -370,18 +325,6 @@ export default function OtpScreen({ authData, onVerified, onBack }) {
                 <ArrowRightIcon size={16} />
               </>
             )}
-          </button>
-
-          <button
-            id="skip-otp-btn"
-            type="button"
-            className="btn btn-secondary btn-sm"
-            style={{ width: '100%', marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
-            onClick={handleSkipOtp}
-            disabled={loading}
-            title="Skip OTP and sign in immediately (Demo & Offline mode)"
-          >
-            <span>⚡ Instant Verify & Skip OTP</span>
           </button>
         </form>
 

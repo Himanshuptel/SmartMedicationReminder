@@ -8,7 +8,8 @@ import DashboardScreen from './screens/DashboardScreen';
 import AlarmModal from './components/AlarmModal';
 import SosModal from './components/SosModal';
 import SystemDesignModal from './components/SystemDesignModal';
-import { api, getUserDisplayName, isDemoUser, saveSession, clearSession, getCookie } from './services/api';
+import { api, getUserDisplayName, saveSession, clearSession, getCookie } from './services/api';
+import { supabase, signOutSupabase } from './services/supabaseClient';
 import './index.css';
 
 const SCREENS = {
@@ -222,43 +223,21 @@ export default function App() {
   };
 
   const userName = getUserDisplayName(authData);
-  const isDemo = isDemoUser(authData);
-
-  const handleSwitchToDemo = async () => {
-    try {
-      const res = await api.demoLogin('patient');
-      handleDirectLogin(res.user, res.token, false);
-    } catch {
-      setScreen(SCREENS.AUTH);
-    }
-  };
 
   const handleRoleChange = async (newRole) => {
     setCurrentRole(newRole);
     try {
-      if (isDemo || isDemoUser(authData)) {
-        const res = await api.demoLogin(newRole);
-        const payload = {
-          type: 'authenticated',
-          data: res.user,
-          user: res.user,
-          token: res.token
-        };
-        setAuthData(payload);
-        saveSession(res.user, res.token);
-      } else {
-        const res = await api.switchRole(newRole);
-        const updated = res.user || { ...(authData?.user || authData?.data), role: newRole };
-        const token = authData?.token || (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null) || getCookie('medremind_token');
-        const payload = {
-          type: 'authenticated',
-          data: updated,
-          user: updated,
-          token
-        };
-        setAuthData(payload);
-        saveSession(updated, token);
-      }
+      const res = await api.switchRole(newRole);
+      const updated = res.user || { ...(authData?.user || authData?.data), role: newRole };
+      const token = authData?.token || (typeof localStorage !== 'undefined' ? localStorage.getItem('medremind_token') : null) || getCookie('medremind_token');
+      const payload = {
+        type: 'authenticated',
+        data: updated,
+        user: updated,
+        token: res.token || token
+      };
+      setAuthData(payload);
+      saveSession(updated, res.token || token);
     } catch (err) {
       console.error('Error switching role:', err);
       setAuthData(prev => {
@@ -274,6 +253,9 @@ export default function App() {
   const handleLogout = async () => {
     try {
       await api.logout();
+    } catch {}
+    try {
+      await signOutSupabase();
     } catch {}
     clearSession();
     setAuthData(null);
@@ -313,11 +295,9 @@ export default function App() {
         onOpenSystemDesign={() => setSystemDesignOpen(true)}
         notifications={notifications}
         userName={userName}
-        isDemo={isDemo}
         isAuthenticated={!!(authData && (authData.token || authData.user) && screen === SCREENS.DASHBOARD)}
         currentScreen={screen}
         onOpenAuth={() => setScreen(s => s === SCREENS.AUTH ? SCREENS.DASHBOARD : SCREENS.AUTH)}
-        onSwitchToDemo={handleSwitchToDemo}
         onLogout={handleLogout}
       />
 

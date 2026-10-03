@@ -6,7 +6,7 @@ import {
   StethoscopeIcon, BarChart2Icon, CheckIcon, LogOutIcon
 } from '../components/Icons';
 import AddMedicineModal from '../components/AddMedicineModal';
-import { api, getUserDisplayName, getUserKey, isDemoUser } from '../services/api';
+import { api, getUserDisplayName, getUserKey } from '../services/api';
 import { playSuccessChime } from '../services/sound';
 
 function formatAuditTime(raw) {
@@ -43,7 +43,6 @@ export default function DashboardScreen({
 }) {
   const userName = getUserDisplayName(authData);
   const userKey = getUserKey(authData);
-  const isDemo = isDemoUser(authData);
   const userTimezone = authData?.user?.timezone || authData?.data?.timezone || 'Asia/Kolkata';
 
   const [activeTab, setActiveTab] = useState('schedule');
@@ -247,11 +246,6 @@ export default function DashboardScreen({
     }
   };
 
-  const handleLoadSampleRegimen = () => {
-    api.loadDemoRegimen(userKey);
-    loadData();
-  };
-
   const handleCheckInteractions = async () => {
     setCheckingInteractions(true);
     const res = await api.checkDrugInteractions(selectedDrugs);
@@ -386,7 +380,7 @@ export default function DashboardScreen({
               </>
             ) : (
               <>
-                Your daily adherence score is <strong>{historyData.stats?.adherence_rate || (isDemo ? 88 : 100)}%</strong> with an active <strong>{historyData.stats?.streak_days || (isDemo ? 6 : 0)}-day streak</strong>.
+                Your daily adherence score is <strong>{historyData.stats?.adherence_rate || 100}%</strong> with an active <strong>{historyData.stats?.streak_days || 0}-day streak</strong>.
               </>
             )}
           </p>
@@ -545,7 +539,7 @@ export default function DashboardScreen({
             <div className="stat-card">
               <span className="stat-label">On-Time Adherence</span>
               <div className="stat-number text-primary">
-                {historyData.stats?.adherence_rate !== undefined ? `${historyData.stats.adherence_rate}%` : (isDemo ? '88%' : '100%')}
+                {historyData.stats?.adherence_rate !== undefined ? `${historyData.stats.adherence_rate}%` : '100%'}
               </div>
               <span className="stat-sub">Compliance score</span>
             </div>
@@ -598,13 +592,6 @@ export default function DashboardScreen({
                     <PlusIcon size={16} />
                     <span>Add First Medicine</span>
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={handleLoadSampleRegimen}
-                  >
-                    <span>Populate Sample Regimen</span>
-                  </button>
                 </div>
               </div>
             );
@@ -641,9 +628,6 @@ export default function DashboardScreen({
                     <button type="button" className="btn btn-primary btn-sm" onClick={() => setShowAddMed(true)}>
                       <PlusIcon size={14} />
                       <span>Add Medicine</span>
-                    </button>
-                    <button type="button" className="btn btn-secondary btn-sm" onClick={handleLoadSampleRegimen}>
-                      <span>Load Sample Regimen</span>
                     </button>
                   </div>
                 </div>
@@ -846,9 +830,6 @@ export default function DashboardScreen({
                   <button type="button" className="btn btn-primary" onClick={() => setShowAddMed(true)}>
                     <PlusIcon size={16} />
                     <span>Add New Medicine</span>
-                  </button>
-                  <button type="button" className="btn btn-outline-primary" onClick={handleLoadSampleRegimen}>
-                    <span>Populate Sample Medicines</span>
                   </button>
                 </div>
               </div>

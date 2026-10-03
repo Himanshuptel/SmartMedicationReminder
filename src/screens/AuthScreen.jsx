@@ -1,13 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ProgressBar from '../components/ProgressBar';
 import { api } from '../services/api';
 import {
   UserIcon, MailIcon, PhoneIcon, LockIcon, EyeIcon, EyeOffIcon,
   ArrowRightIcon, AlertCircleIcon, ShieldIcon, UsersIcon, StethoscopeIcon,
-  PillIcon, BellIcon, BarChart2Icon
+  PillIcon, BellIcon, BarChart2Icon, CheckIcon
 } from '../components/Icons';
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_RE = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
 const PHONE_RE = /^\+?[\d\s\-()]{7,15}$/;
 
 const ROLES = [
@@ -58,12 +58,80 @@ function FieldError({ id, msg }) {
 }
 
 /* ── Sign Up Form ─────────────────────────────────── */
-function SignUpForm({ onDirectSignUp, onOtpSignUp, loading, serverError, onSwitchToLogin }) {
+function SignUpForm({
+  onDirectSignUp,
+  onOtpSignUp,
+  loading,
+  serverError,
+  initialEmail,
+  onSwitchToLogin
+}) {
   const [form, setForm] = useState({
-    fullName: '', email: '', phone: '', password: '', confirmPassword: '', role: 'patient',
+    fullName: '',
+    email: initialEmail || '',
+    phone: '',
+    password: '',
+    confirmPassword: '',
+    role: 'patient',
   });
   const [errors, setErrors] = useState({});
   const [useOtp, setUseOtp] = useState(true);
+
+  // Real-time email existence check state (Supabase & SQLite)
+  const [emailCheck, setEmailCheck] = useState({
+    checking: false,
+    exists: false,
+    checkedEmail: '',
+    message: ''
+  });
+  const checkTimeoutRef = useRef(null);
+
+  useEffect(() => {
+    if (initialEmail && initialEmail !== form.email) {
+      setForm(f => ({ ...f, email: initialEmail }));
+    }
+  }, [initialEmail]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Debounced check if email already exists in system (Supabase / SQLite)
+  useEffect(() => {
+    const clean = (form.email || '').trim().toLowerCase();
+    if (!clean || !EMAIL_RE.test(clean)) {
+      setEmailCheck({ checking: false, exists: false, checkedEmail: clean, message: '' });
+      return;
+    }
+
+    if (checkTimeoutRef.current) clearTimeout(checkTimeoutRef.current);
+    setEmailCheck(c => ({ ...c, checking: true }));
+
+    checkTimeoutRef.current = setTimeout(async () => {
+      try {
+        const res = await api.checkEmail(clean);
+        if (res.exists) {
+          setEmailCheck({
+            checking: false,
+            exists: true,
+            checkedEmail: clean,
+            message: 'This email is already registered in our system.'
+          });
+          setErrors(e => ({ ...e, email: 'An account with this email already exists.' }));
+        } else {
+          setEmailCheck({
+            checking: false,
+            exists: false,
+            checkedEmail: clean,
+            message: 'Email address is available'
+          });
+          setErrors(e => ({ ...e, email: '' }));
+        }
+      } catch {
+        setEmailCheck({ checking: false, exists: false, checkedEmail: clean, message: '' });
+      }
+    }, 450);
+
+    return () => {
+      if (checkTimeoutRef.current) clearTimeout(checkTimeoutRef.current);
+    };
+  }, [form.email]);
 
   const change = e => {
     const { name, value } = e.target;
@@ -76,6 +144,7 @@ function SignUpForm({ onDirectSignUp, onOtpSignUp, loading, serverError, onSwitc
     if (!form.fullName.trim()) e.fullName = 'Full name is required.';
     if (!form.email.trim()) e.email = 'Email is required.';
     else if (!EMAIL_RE.test(form.email)) e.email = 'Please enter a valid email address.';
+    else if (emailCheck.exists) e.email = 'This email is already registered in our system.';
     if (!form.phone.trim()) e.phone = 'Phone number is required.';
     else if (!PHONE_RE.test(form.phone)) e.phone = 'Please enter a valid phone number.';
     if (!form.password) e.password = 'Password is required.';
@@ -86,10 +155,27 @@ function SignUpForm({ onDirectSignUp, onOtpSignUp, loading, serverError, onSwitc
     return e;
   };
 
-  const handleSubmit = e => {
+  const handleSubmit = async e => {
     e.preventDefault();
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
+
+    // Final pre-submit verification of email availability
+    const cleanEmail = form.email.trim().toLowerCase();
+    try {
+      const checkRes = await api.checkEmail(cleanEmail);
+      if (checkRes.exists) {
+        setEmailCheck({
+          checking: false,
+          exists: true,
+          checkedEmail: cleanEmail,
+          message: 'This email is already registered in our system.'
+        });
+        setErrors({ email: 'An account with this email already exists. Please sign in instead.' });
+        return;
+      }
+    } catch {}
+
     if (useOtp) {
       onOtpSignUp(form);
     } else {
@@ -145,6 +231,41 @@ function SignUpForm({ onDirectSignUp, onOtpSignUp, loading, serverError, onSwitc
             aria-invalid={!!errors.email}
           />
         </div>
+
+        {/* Real-time Email Existence Status */}
+        {emailCheck.checking && (
+          <span className="email-check-badge checking">
+            ⏳ Checking system availability...
+          </span>
+        )}
+        {!emailCheck.checking && emailCheck.exists && (
+          <div className="email-check-badge exists">
+            <span>⚠️ This email is already registered in our system.</span>
+            <button
+              type="button"
+              onClick={() => onSwitchToLogin(form.email)}
+              style={{
+                textDecoration: 'underline',
+                fontWeight: 700,
+                background: 'none',
+                border: 'none',
+                color: 'inherit',
+                cursor: 'pointer',
+                padding: '0 4px',
+                fontSize: '0.78rem'
+              }}
+            >
+              Sign in instead →
+            </button>
+          </div>
+        )}
+        {!emailCheck.checking && !emailCheck.exists && emailCheck.message && (
+          <span className="email-check-badge available">
+            <CheckIcon size={13} />
+            <span>{emailCheck.message}</span>
+          </span>
+        )}
+
         <FieldError id="su-email-err" msg={errors.email} />
       </div>
 
@@ -267,12 +388,12 @@ function SignUpForm({ onDirectSignUp, onOtpSignUp, loading, serverError, onSwitc
             checked={useOtp}
             onChange={e => setUseOtp(e.target.checked)}
           />
-          <span>Verify account with Two-Step Security OTP</span>
+          <span>Verify email ownership with Two-Step Security OTP</span>
         </label>
       </div>
 
       <button id="signup-submit" type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: 4 }} disabled={loading}>
-        <span>{loading ? 'Creating Account...' : (useOtp ? 'Register with Two-Step OTP' : 'Create Account & Sign In')}</span>
+        <span>{loading ? 'Verifying & Registering...' : (useOtp ? 'Register with Two-Step OTP' : 'Create Account & Sign In')}</span>
         <ArrowRightIcon size={16} />
       </button>
 
@@ -280,7 +401,7 @@ function SignUpForm({ onDirectSignUp, onOtpSignUp, loading, serverError, onSwitc
         <span style={{ fontSize: '0.84rem', color: 'var(--color-text-2)' }}>Already have an account? </span>
         <button
           type="button"
-          onClick={onSwitchToLogin}
+          onClick={() => onSwitchToLogin(form.email)}
           style={{ fontWeight: 700, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '0.84rem' }}
         >
           Sign In
@@ -296,13 +417,18 @@ function LoginForm({
   onOtpLogin,
   loading,
   serverError,
-  onDemoLogin,
-  demoMode,
+  initialIdentifier,
   onSwitchToSignUp
 }) {
-  const [form, setForm] = useState({ identifier: '', password: '' });
+  const [form, setForm] = useState({ identifier: initialIdentifier || '', password: '' });
   const [errors, setErrors] = useState({});
   const [useOtp, setUseOtp] = useState(false);
+
+  useEffect(() => {
+    if (initialIdentifier && initialIdentifier !== form.identifier) {
+      setForm(f => ({ ...f, identifier: initialIdentifier }));
+    }
+  }, [initialIdentifier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const change = e => {
     const { name, value } = e.target;
@@ -315,16 +441,32 @@ function LoginForm({
     if (!form.identifier.trim()) {
       e.identifier = useOtp ? 'Please enter your email or phone to receive an OTP code.' : 'Email or phone is required.';
     }
-    if (!useOtp && !demoMode && !form.password) {
+    if (!useOtp && !form.password) {
       e.password = 'Password is required.';
     }
     return e;
   };
 
-  const handleSubmit = e => {
+  const handleSubmit = async e => {
     e.preventDefault();
     const errs = validate();
     if (Object.keys(errs).length) { setErrors(errs); return; }
+
+    const cleanId = form.identifier.trim().toLowerCase();
+
+    // Pre-verify that the account actually exists before attempting login
+    if (cleanId.includes('@')) {
+      try {
+        const checkRes = await api.checkEmail(cleanId);
+        if (checkRes && checkRes.exists === false) {
+          setErrors({
+            identifier: 'No account found with this email in our system. Please create an account first.'
+          });
+          return;
+        }
+      } catch {}
+    }
+
     if (useOtp) {
       onOtpLogin(form);
     } else {
@@ -360,12 +502,32 @@ function LoginForm({
           />
         </div>
         <FieldError id="li-id-err" msg={errors.identifier} />
+        {errors.identifier && errors.identifier.includes('No account found') && (
+          <div style={{ marginTop: 4, textAlign: 'right' }}>
+            <button
+              type="button"
+              onClick={() => onSwitchToSignUp(form.identifier)}
+              style={{
+                fontSize: '0.8rem',
+                color: 'var(--color-primary)',
+                fontWeight: 600,
+                background: 'none',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+                textDecoration: 'underline'
+              }}
+            >
+              Click here to Register this email →
+            </button>
+          </div>
+        )}
       </div>
 
       {!useOtp && (
         <div className="form-group">
           <label htmlFor="li-password" className="form-label">
-            Password {demoMode ? '(Optional in Demo Mode)' : <span className="required-dot" />}
+            Password <span className="required-dot" />
           </label>
           <PasswordInput
             id="li-password"
@@ -398,7 +560,7 @@ function LoginForm({
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4 }}>
         <button id="login-submit" type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={loading}>
-          <span>{loading ? 'Processing...' : (useOtp ? 'Send Verification OTP' : 'Sign In')}</span>
+          <span>{loading ? 'Verifying Account...' : (useOtp ? 'Send Verification OTP' : 'Sign In')}</span>
           <ArrowRightIcon size={16} />
         </button>
 
@@ -406,64 +568,12 @@ function LoginForm({
           <span style={{ fontSize: '0.84rem', color: 'var(--color-text-2)' }}>Don't have an account? </span>
           <button
             type="button"
-            onClick={onSwitchToSignUp}
+            onClick={() => onSwitchToSignUp(form.identifier)}
             style={{ fontWeight: 700, color: 'var(--color-primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: '0.84rem' }}
           >
             Create an Account
           </button>
         </div>
-
-        {demoMode && (
-          <div className="demo-login-section" style={{ marginTop: 8, paddingTop: 12, borderTop: '1px solid var(--color-border)' }}>
-            <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--color-text-muted)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              1-Click Demo Login (Instant Access)
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-              <button
-                id="demo-login-patient"
-                type="button"
-                className="btn btn-secondary btn-xs"
-                onClick={() => onDemoLogin('patient')}
-                disabled={loading}
-                title="Instant Login as Patient: Himanshu Patel"
-              >
-                <span>👤 Patient</span>
-              </button>
-              <button
-                id="demo-login-caregiver"
-                type="button"
-                className="btn btn-secondary btn-xs"
-                onClick={() => onDemoLogin('caregiver')}
-                disabled={loading}
-                title="Instant Login as Caregiver: Divyadarshan Chauhan"
-              >
-                <span>🤝 Caregiver</span>
-              </button>
-              <button
-                id="demo-login-clinician"
-                type="button"
-                className="btn btn-secondary btn-xs"
-                onClick={() => onDemoLogin('clinician')}
-                disabled={loading}
-                title="Instant Login as Clinician: Prof. Sathwik Chebrolu"
-              >
-                <span>🩺 Clinician</span>
-              </button>
-            </div>
-            <div style={{ marginTop: 8, textAlign: 'center' }}>
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                onClick={() => {
-                  setForm({ identifier: 'himanshu@paruluniversity.ac.in', password: 'DemoPassword123!' });
-                  setErrors({});
-                }}
-              >
-                <span>Fill Demo Credentials into Form</span>
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     </form>
   );
@@ -474,6 +584,7 @@ export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMe
   const [mode, setMode] = useState('login');
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState('');
+  const [prefilledEmail, setPrefilledEmail] = useState('');
   const [config, setConfig] = useState({ demo_mode: true });
 
   useEffect(() => {
@@ -509,7 +620,6 @@ export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMe
         type: 'signup',
         email: res.email || formData.email,
         data: formData,
-        demoOtp: res.demo_otp,
         totpSecret: res.totp_secret,
         totpQr: res.totp_qr
       });
@@ -546,29 +656,12 @@ export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMe
         type: 'login',
         email: res.email || formData.identifier,
         data: formData,
-        demoOtp: res.demo_otp,
         totpSecret: res.totp_secret,
         totpQr: res.totp_qr
       });
     } catch (err) {
       setLoading(false);
       setServerError(err.message || 'Login failed. Please check your credentials.');
-    }
-  };
-
-  const handleDemoLogin = async (role = 'patient') => {
-    if (onClearSessionExpiredMessage) onClearSessionExpiredMessage();
-    setLoading(true);
-    setServerError('');
-    try {
-      const res = await api.demoLogin(role);
-      setLoading(false);
-      if (onDirectLogin) {
-        onDirectLogin(res.user, res.token, false);
-      }
-    } catch (err) {
-      setLoading(false);
-      setServerError(err.message || 'Demo login failed.');
     }
   };
 
@@ -579,7 +672,7 @@ export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMe
           <div className="preview-logo-hero">
             <img src={`${import.meta.env.BASE_URL}logo.png`} alt="MedRemind" width={80} height={80} />
             <h2>Smart Medication<br />Reminder</h2>
-            <p>Clinical regimen adherence with two-step secure verification.</p>
+            <p>Clinical regimen adherence with verified identity and two-step security.</p>
           </div>
           <div className="preview-features">
             {[
@@ -615,7 +708,7 @@ export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMe
             <p className="screen-subtitle">
               {mode === 'login'
                 ? 'Sign in to access your medication schedule and dashboard.'
-                : 'Register your profile to set up your personalized medication schedule.'}
+                : 'Register your profile to set up your verified medication schedule.'}
             </p>
 
             <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
@@ -645,9 +738,12 @@ export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMe
                 onOtpLogin={handleOtpLoginSubmit}
                 loading={loading}
                 serverError={serverError}
-                onDemoLogin={handleDemoLogin}
-                demoMode={config.demo_mode}
-                onSwitchToSignUp={() => { setMode('signup'); setServerError(''); }}
+                initialIdentifier={prefilledEmail}
+                onSwitchToSignUp={(email) => {
+                  setPrefilledEmail(email || '');
+                  setMode('signup');
+                  setServerError('');
+                }}
               />
             ) : (
               <SignUpForm
@@ -655,7 +751,12 @@ export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMe
                 onOtpSignUp={handleOtpSignUp}
                 loading={loading}
                 serverError={serverError}
-                onSwitchToLogin={() => { setMode('login'); setServerError(''); }}
+                initialEmail={prefilledEmail}
+                onSwitchToLogin={(email) => {
+                  setPrefilledEmail(email || '');
+                  setMode('login');
+                  setServerError('');
+                }}
               />
             )}
           </div>

@@ -621,7 +621,8 @@ export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMe
         email: res.email || formData.email,
         data: formData,
         totpSecret: res.totp_secret,
-        totpQr: res.totp_qr
+        totpQr: res.totp_qr,
+        otpCode: res.demo_otp
       });
     } catch (err) {
       setLoading(false);
@@ -657,7 +658,8 @@ export default function AuthScreen({ onComplete, onDirectLogin, sessionExpiredMe
         email: res.email || formData.identifier,
         data: formData,
         totpSecret: res.totp_secret,
-        totpQr: res.totp_qr
+        totpQr: res.totp_qr,
+        otpCode: res.demo_otp
       });
     } catch (err) {
       setLoading(false);

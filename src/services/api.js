@@ -15,8 +15,18 @@ const API_BASE = import.meta.env.VITE_API_URL || '/api';
 // Detect if running on a static host like GitHub Pages
 export const isStaticDeployment = typeof window !== 'undefined' && (
   window.location.hostname.endsWith('github.io') ||
+  window.location.hostname.includes('github.io') ||
   window.location.protocol === 'file:'
 );
+
+export function isStaticHostOrOffline(err) {
+  if (isStaticDeployment) return true;
+  if (!err) return false;
+  if (err.status === 405 || err.code === 'METHOD_NOT_ALLOWED') return true;
+  if (err.isNetworkError || err.status === 0) return true;
+  if (err.status === 404 && (!err.details || !err.details.error)) return true;
+  return false;
+}
 
 // ── Cookie & Persistent Browser Storage Utilities ─────────────────
 
@@ -300,14 +310,16 @@ export const api = {
     }
 
     // 1. Check Flask Backend API
-    try {
-      const res = await request(`/auth/check-email?email=${encodeURIComponent(cleanEmail)}`);
-      if (res && typeof res.exists === 'boolean') {
-        return res;
-      }
-    } catch (err) {
-      if (!err.isNetworkError && err.status) {
-        // Backend replied with error status
+    if (!isStaticDeployment) {
+      try {
+        const res = await request(`/auth/check-email?email=${encodeURIComponent(cleanEmail)}`);
+        if (res && typeof res.exists === 'boolean') {
+          return res;
+        }
+      } catch (err) {
+        if (!isStaticHostOrOffline(err) && err.status) {
+          // Backend replied with error status
+        }
       }
     }
 
@@ -335,64 +347,123 @@ export const api = {
 
   // --- Real Two-Step Authentication & Direct Sign In ---
   async directLogin({ identifier, password }) {
-    try {
-      const res = await request('/auth/direct-login', {
-        method: 'POST',
-        body: JSON.stringify({ identifier, password })
-      });
-      if (res.token) {
-        saveSession(res.user, res.token);
-      }
-      return res;
-    } catch (err) {
-      const cleanId = (identifier || '').trim().toLowerCase();
+    const cleanId = (identifier || '').trim().toLowerCase();
 
-      // If backend responded with explicit HTTP error (401, 404, etc.), rethrow! NEVER auto-create users!
-      if (!err.isNetworkError && err.status) {
-        throw err;
+    if (!isStaticDeployment) {
+      try {
+        const res = await request('/auth/direct-login', {
+          method: 'POST',
+          body: JSON.stringify({ identifier, password })
+        });
+        if (res.token) {
+          saveSession(res.user, res.token);
+        }
+        return res;
+      } catch (err) {
+        // If backend responded with explicit JSON error (401, 404), rethrow!
+        if (!isStaticHostOrOffline(err) && err.status) {
+          throw err;
+        }
       }
-
-      // Offline fallback: check if user exists in local storage
-      const localUsers = getClientStorage('medremind_local_users', []);
-      const match = localUsers.find(u => u.email?.toLowerCase() === cleanId || u.phone === cleanId);
-      if (match) {
-        const token = 'auth_' + Date.now();
-        saveSession(match, token);
-        return { success: true, user: match, token };
-      }
-
-      throw new Error('No account found with this email. Please check your credentials or create an account.');
     }
+
+    // Static host (GitHub Pages) or Offline fallback:
+    // 1. Check Supabase Cloud PostgreSQL directly
+    if (isSupabaseAvailable()) {
+      try {
+        const { data, error } = await supabase
+          .from('users')
+          .select('*')
+          .or(`email.ilike.${cleanId},phone.eq.${cleanId}`)
+          .limit(1);
+
+        if (!error && data && data.length > 0) {
+          const user = data[0];
+          const token = 'su_' + Date.now();
+          saveSession(user, token);
+          return { success: true, user, token };
+        }
+      } catch (e) {
+        console.warn('Supabase cloud login check error:', e);
+      }
+    }
+
+    // 2. Offline fallback: check if user exists in local storage
+    const localUsers = getClientStorage('medremind_local_users', []);
+    const match = localUsers.find(u => u.email?.toLowerCase() === cleanId || u.phone === cleanId);
+    if (match) {
+      const token = 'auth_' + Date.now();
+      saveSession(match, token);
+      return { success: true, user: match, token };
+    }
+
+    throw new Error('Account not found. Please check your credentials or create an account.');
   },
 
   async directRegister(userData) {
-    try {
-      const res = await request('/auth/direct-register', {
-        method: 'POST',
-        body: JSON.stringify(userData)
-      });
-      if (res.token) {
-        saveSession(res.user, res.token);
+    if (!isStaticDeployment) {
+      try {
+        const res = await request('/auth/direct-register', {
+          method: 'POST',
+          body: JSON.stringify(userData)
+        });
+        if (res.token) {
+          saveSession(res.user, res.token);
+        }
+        return res;
+      } catch (err) {
+        // If backend rejected (409 Conflict duplicate email or 422), rethrow!
+        if (!isStaticHostOrOffline(err) && err.status) {
+          throw err;
+        }
       }
-      return res;
-    } catch (err) {
-      // If backend rejected (e.g. 409 Conflict duplicate email or 422 Validation error), rethrow!
-      if (!err.isNetworkError && err.status) {
-        throw err;
-      }
-
-      // Offline fallback: check if email already exists before creating
-      const cleanEmail = (userData.email || '').trim().toLowerCase();
-      const localUsers = getClientStorage('medremind_local_users', []);
-      if (localUsers.some(u => u.email?.toLowerCase() === cleanEmail)) {
-        throw new Error('An account with this email already exists in our system. Please log in.');
-      }
-
-      const user = createOrGetClientUser(userData.email, userData.fullName || userData.name, userData.role);
-      const token = 'reg_' + Date.now();
-      saveSession(user, token);
-      return { success: true, user, token };
     }
+
+    // Static host (GitHub Pages) or Offline fallback engine:
+    const cleanEmail = (userData.email || '').trim().toLowerCase();
+
+    // 1. Check if email already exists in Supabase Cloud
+    if (isSupabaseAvailable()) {
+      try {
+        const suCheck = await checkEmailInSupabase(cleanEmail);
+        if (suCheck && suCheck.exists) {
+          throw new Error('An account with this email already exists in our system. Please log in.');
+        }
+      } catch (suErr) {
+        if (suErr.message && suErr.message.includes('already exists')) throw suErr;
+      }
+    }
+
+    // 2. Check if email already exists in Local Storage
+    const localUsers = getClientStorage('medremind_local_users', []);
+    if (localUsers.some(u => u.email?.toLowerCase() === cleanEmail)) {
+      throw new Error('An account with this email already exists in our system. Please log in.');
+    }
+
+    // 3. Direct write to Supabase Cloud PostgreSQL
+    let registeredUser = null;
+    if (isSupabaseAvailable()) {
+      try {
+        const { data, error } = await supabase.from('users').insert([{
+          name: userData.fullName || userData.name || cleanEmail.split('@')[0],
+          email: cleanEmail,
+          phone: userData.phone || '+91 98765 00000',
+          role: userData.role || 'patient',
+          timezone: userData.timezone || 'Asia/Kolkata',
+          password_hash: userData.password ? ('client_pw_' + btoa(userData.password)) : 'client_session'
+        }]).select().single();
+        if (!error && data) {
+          registeredUser = data;
+        }
+      } catch (e) {
+        console.warn('Supabase cloud direct register error:', e);
+      }
+    }
+
+    const user = registeredUser || createOrGetClientUser(userData.email, userData.fullName || userData.name, userData.role);
+    const token = 'reg_' + Date.now();
+    saveSession(user, token);
+    return { success: true, user, token };
   },
 
   async switchRole(role) {
@@ -440,66 +511,97 @@ export const api = {
   },
 
   async register(userData) {
-    try {
-      return await request('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify(userData)
-      });
-    } catch (err) {
-      if (!err.isNetworkError && err.status) {
-        throw err;
+    if (!isStaticDeployment) {
+      try {
+        return await request('/auth/register', {
+          method: 'POST',
+          body: JSON.stringify(userData)
+        });
+      } catch (err) {
+        if (!isStaticHostOrOffline(err) && err.status) {
+          throw err;
+        }
       }
-      const cleanEmail = (userData.email || '').trim().toLowerCase();
-      const localUsers = getClientStorage('medremind_local_users', []);
-      if (localUsers.some(u => u.email?.toLowerCase() === cleanEmail)) {
-        throw new Error('Email is already registered. Please log in.');
-      }
-      // Offline / GitHub Pages fallback
-      const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      const email = userData.email;
-      if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.setItem('pending_otp_' + email.toLowerCase(), generatedOtp);
-      }
-      createOrGetClientUser(email, userData.fullName || userData.name, userData.role);
-      return {
-        success: true,
-        email: email,
-        demo_otp: generatedOtp,
-        message: `Account created. Your verification OTP is: ${generatedOtp}`
-      };
     }
+
+    const cleanEmail = (userData.email || '').trim().toLowerCase();
+
+    // Check if email already registered in Supabase
+    if (isSupabaseAvailable()) {
+      try {
+        const { data } = await supabase.from('users').select('id').ilike('email', cleanEmail).limit(1);
+        if (data && data.length > 0) {
+          throw new Error('Email is already registered in our system. Please log in.');
+        }
+      } catch (e) {
+        if (e.message && e.message.includes('already registered')) throw e;
+      }
+    }
+
+    const localUsers = getClientStorage('medremind_local_users', []);
+    if (localUsers.some(u => u.email?.toLowerCase() === cleanEmail)) {
+      throw new Error('Email is already registered. Please log in.');
+    }
+
+    // Offline / GitHub Pages fallback
+    const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    const email = userData.email;
+    if (typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem('pending_otp_' + email.toLowerCase(), generatedOtp);
+      sessionStorage.setItem('pending_user_' + email.toLowerCase(), JSON.stringify(userData));
+    }
+    createOrGetClientUser(email, userData.fullName || userData.name, userData.role);
+    return {
+      success: true,
+      email: email,
+      demo_otp: generatedOtp,
+      message: `Account created. Your verification OTP is: ${generatedOtp}`
+    };
   },
 
   async login(credentials) {
-    try {
-      return await request('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify(credentials)
-      });
-    } catch (err) {
-      if (!err.isNetworkError && err.status) {
-        throw err;
+    if (!isStaticDeployment) {
+      try {
+        return await request('/auth/login', {
+          method: 'POST',
+          body: JSON.stringify(credentials)
+        });
+      } catch (err) {
+        if (!isStaticHostOrOffline(err) && err.status) {
+          throw err;
+        }
       }
-      const identifier = (credentials.identifier || credentials.email || '').trim().toLowerCase();
-      const localUsers = getClientStorage('medremind_local_users', []);
-      const existsLocally = localUsers.some(u => u.email?.toLowerCase() === identifier || u.phone === identifier);
-
-      if (!existsLocally) {
-        throw new Error('No account found with this email. Please check your credentials or create an account.');
-      }
-
-      // Offline / GitHub Pages fallback
-      const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      if (typeof sessionStorage !== 'undefined' && identifier) {
-        sessionStorage.setItem('pending_otp_' + identifier, generatedOtp);
-      }
-      return {
-        success: true,
-        email: identifier,
-        demo_otp: generatedOtp,
-        message: `Verification code generated. Your OTP is: ${generatedOtp}`
-      };
     }
+
+    const identifier = (credentials.identifier || credentials.email || '').trim().toLowerCase();
+
+    let userFound = false;
+    if (isSupabaseAvailable()) {
+      try {
+        const { data } = await supabase.from('users').select('id').or(`email.ilike.${identifier},phone.eq.${identifier}`).limit(1);
+        if (data && data.length > 0) userFound = true;
+      } catch {}
+    }
+
+    const localUsers = getClientStorage('medremind_local_users', []);
+    const existsLocally = localUsers.some(u => u.email?.toLowerCase() === identifier || u.phone === identifier);
+    if (existsLocally) userFound = true;
+
+    if (!userFound) {
+      throw new Error('No account found with this email. Please check your credentials or create an account.');
+    }
+
+    // Offline / GitHub Pages fallback
+    const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
+    if (typeof sessionStorage !== 'undefined' && identifier) {
+      sessionStorage.setItem('pending_otp_' + identifier, generatedOtp);
+    }
+    return {
+      success: true,
+      email: identifier,
+      demo_otp: generatedOtp,
+      message: `Verification code generated. Your OTP is: ${generatedOtp}`
+    };
   },
 
   async demoLogin(role = 'patient') {
@@ -524,35 +626,65 @@ export const api = {
   },
 
   async verifyOtp({ email, otp }) {
-    try {
-      const res = await request('/auth/verify-otp', {
-        method: 'POST',
-        body: JSON.stringify({ email, otp })
-      });
+    if (!isStaticDeployment) {
+      try {
+        const res = await request('/auth/verify-otp', {
+          method: 'POST',
+          body: JSON.stringify({ email, otp })
+        });
 
-      if (res.token) {
-        saveSession(res.user, res.token);
+        if (res.token) {
+          saveSession(res.user, res.token);
+        }
+
+        return res;
+      } catch (err) {
+        if (!isStaticHostOrOffline(err) && err.status) {
+          throw err;
+        }
       }
-
-      return res;
-    } catch (err) {
-      if (!err.isNetworkError && err.status) {
-        throw err;
-      }
-      // Offline / GitHub Pages fallback
-      const cleanEmail = (email || '').trim().toLowerCase();
-      const storedOtp = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('pending_otp_' + cleanEmail) : null;
-
-      if (storedOtp && storedOtp === otp) {
-        const localUsers = getClientStorage('medremind_local_users', []);
-        const user = localUsers.find(u => u.email?.toLowerCase() === cleanEmail) || { email: cleanEmail, role: 'patient', name: cleanEmail.split('@')[0] };
-        const token = 'token_' + Date.now();
-        saveSession(user, token);
-        return { success: true, user, token };
-      }
-
-      throw new Error('Invalid verification code. Please check the code and try again.');
     }
+
+    // Offline / GitHub Pages fallback
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const storedOtp = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('pending_otp_' + cleanEmail) : null;
+
+    if (storedOtp && storedOtp === otp) {
+      let pendingUserData = null;
+      if (typeof sessionStorage !== 'undefined') {
+        try {
+          const raw = sessionStorage.getItem('pending_user_' + cleanEmail);
+          if (raw) pendingUserData = JSON.parse(raw);
+        } catch {}
+      }
+
+      if (isSupabaseAvailable() && pendingUserData) {
+        try {
+          await supabase.from('users').insert([{
+            name: pendingUserData.fullName || pendingUserData.name || cleanEmail.split('@')[0],
+            email: cleanEmail,
+            phone: pendingUserData.phone || '+91 98765 00000',
+            role: pendingUserData.role || 'patient',
+            timezone: pendingUserData.timezone || 'Asia/Kolkata',
+            password_hash: pendingUserData.password ? ('client_pw_' + btoa(pendingUserData.password)) : 'client_session'
+          }]);
+        } catch (e) {
+          console.warn('Supabase verifyOtp user sync error:', e);
+        }
+      }
+
+      const localUsers = getClientStorage('medremind_local_users', []);
+      const user = localUsers.find(u => u.email?.toLowerCase() === cleanEmail) || {
+        email: cleanEmail,
+        role: pendingUserData?.role || 'patient',
+        name: pendingUserData?.fullName || pendingUserData?.name || cleanEmail.split('@')[0]
+      };
+      const token = 'token_' + Date.now();
+      saveSession(user, token);
+      return { success: true, user, token };
+    }
+
+    throw new Error('Invalid verification code. Please check the code and try again.');
   },
 
   async resendOtp({ email }) {

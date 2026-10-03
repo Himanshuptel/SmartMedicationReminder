@@ -51,6 +51,11 @@ export default function OtpScreen({ authData, onVerified, onBack }) {
 
   const contactEmail = authData?.email || authData?.data?.email || authData?.data?.identifier || '';
   const maskedContact = maskContact(contactEmail);
+  const pendingSessionOtp = authData?.otpCode || authData?.demo_otp || (
+    typeof sessionStorage !== 'undefined' && contactEmail
+      ? sessionStorage.getItem('pending_otp_' + contactEmail.toLowerCase())
+      : null
+  );
 
   // If TOTP QR isn't available yet, fetch it from backend
   useEffect(() => {
@@ -178,6 +183,35 @@ export default function OtpScreen({ authData, onVerified, onBack }) {
           <span>Verification code sent to</span>
           <strong>{maskedContact}</strong>
         </div>
+
+        {pendingSessionOtp && (
+          <div style={{
+            background: 'var(--color-primary-soft, rgba(14, 165, 233, 0.1))',
+            border: '1px solid rgba(14, 165, 233, 0.25)',
+            borderRadius: 10,
+            padding: '10px 14px',
+            marginBottom: 16,
+            fontSize: '0.84rem',
+            color: 'var(--color-primary, #0ea5e9)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10
+          }}>
+            <span>Session Verification Code: <strong>{pendingSessionOtp}</strong></span>
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              style={{ fontWeight: 700, textDecoration: 'underline', color: 'inherit' }}
+              onClick={() => {
+                const arr = pendingSessionOtp.split('').slice(0, OTP_LEN);
+                setDigits(arr);
+              }}
+            >
+              Autofill
+            </button>
+          </div>
+        )}
 
         {/* 📱 Free Google Authenticator (TOTP MFA) Integration */}
         <div style={{
